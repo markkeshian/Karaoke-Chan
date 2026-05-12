@@ -1,0 +1,22 @@
+# Flutter/Dart build artifacts
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.g.dart
+*.freezed.dart
+.packages
+
+# Lock file (uncomment if you want to commit it)
+# pubspec.lock
+
+# IDE folders
+.idea/
+*.iml
+.vscode/
+
+# Platform folders (generated, checked in separately if needed)
+# android/
+# ios/
+# linux/
+# web/

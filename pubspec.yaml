@@ -1,0 +1,74 @@
+name: karaoke_chan
+description: A cross-platform karaoke queue app.
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Media playback
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.4
+  media_kit_libs_video: ^1.0.5
+
+  # Database
+  sqflite: ^2.3.3+1
+  sqflite_common_ffi: ^2.3.3
+  path: ^1.9.0
+
+  # State management
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  # Routing
+  go_router: ^14.2.0
+
+  # File picking
+  file_picker: ^8.0.3
+
+  # Persistence
+  shared_preferences: ^2.3.3
+
+  # Local network server (remote queue)
+  shelf: ^1.4.2
+  shelf_router: ^1.1.4
+
+  # QR code display
+  qr_flutter: ^4.1.0
+
+  # Network info (server IP)
+  network_info_plus: ^6.1.0
+
+  # UI extras
+  google_fonts: ^6.2.1
+  flutter_animate: ^4.5.0
+  gap: ^3.0.1
+  reorderables: ^0.6.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  build_runner: ^2.4.11
+  riverpod_generator: ^2.4.0
+  custom_lint: ^0.7.6
+  riverpod_lint: ^2.3.10
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/icons/
+    - assets/audio/
+  fonts:
+    - family: Nunito
+      fonts:
+        - asset: assets/fonts/Nunito-Regular.ttf
+        - asset: assets/fonts/Nunito-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Nunito-ExtraBold.ttf
+          weight: 800
