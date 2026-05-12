@@ -30,7 +30,7 @@ class DatabaseHelper {
 
     _db = await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -48,6 +48,7 @@ class DatabaseHelper {
         cover_art_path TEXT,
         play_count INTEGER NOT NULL DEFAULT 0,
         last_played_at TEXT,
+        has_video INTEGER NOT NULL DEFAULT 0,
         added_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     ''');
@@ -71,7 +72,12 @@ class DatabaseHelper {
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    // Future migration logic goes here
+    // v1 → v2: add has_video column to songs
+    if (oldVersion < 2) {
+      await db.execute(
+        'ALTER TABLE songs ADD COLUMN has_video INTEGER NOT NULL DEFAULT 0',
+      );
+    }
   }
 
   Future<void> close() async {

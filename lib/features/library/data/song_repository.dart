@@ -34,8 +34,8 @@ class SongRepository {
     final id = await _db.db.rawInsert(
       '''INSERT OR REPLACE INTO songs
          (title, artist, file_path, folder_name, duration_ms, cover_art_path,
-          play_count, last_played_at, added_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+          play_count, last_played_at, has_video, added_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
       [
         song.title,
         song.artist,
@@ -45,6 +45,7 @@ class SongRepository {
         song.coverArtPath,
         song.playCount,
         song.lastPlayedAt?.toIso8601String(),
+        song.hasVideo ? 1 : 0,
         song.addedAt.toIso8601String(),
       ],
     );
@@ -97,6 +98,26 @@ class SongRepository {
     );
     return rows.map(Song.fromMap).toList();
   }
+
+  /// Returns groups of songs that share the same title (case-insensitive)
+  /// but have different file paths — i.e. potential duplicates / alternate versions.
+  /// Only groups with 2 or more entries are returned.
+  Future<Map<String, List<Song>>> getDuplicates() async {
+    final rows = await _db.db.rawQuery('''
+      SELECT * FROM songs
+      WHERE LOWER(title) IN (
+        SELECT LOWER(title) FROM songs GROUP BY LOWER(title) HAVING COUNT(*) > 1
+      )
+      ORDER BY LOWER(title) ASC, added_at ASC
+    ''');
+    final songs = rows.map(Song.fromMap).toList();
+    final Map<String, List<Song>> groups = {};
+    for (final song in songs) {
+      final key = song.title.toLowerCase();
+      groups.putIfAbsent(key, () => []).add(song);
+    }
+    return groups;
+  }
 }
 
 final songRepositoryProvider = Provider<SongRepository>(
@@ -105,4 +126,10 @@ final songRepositoryProvider = Provider<SongRepository>(
 
 final songsProvider = FutureProvider.family<List<Song>, String?>((ref, search) {
   return ref.watch(songRepositoryProvider).getAll(search: search);
+});
+
+/// Watches for songs that share the same title (case-insensitive) but live at
+/// different file paths.  Invalidated whenever [songRepositoryProvider] is.
+final duplicatesProvider = FutureProvider<Map<String, List<Song>>>((ref) {
+  return ref.watch(songRepositoryProvider).getDuplicates();
 });

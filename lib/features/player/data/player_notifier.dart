@@ -44,6 +44,11 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
     _subs.add(_player.stream.error.listen((err) {
       _update((s) => s.copyWith(status: PlayerStatus.error, errorMessage: err));
     }));
+    _subs.add(_player.stream.tracks.listen((tracks) {
+      // A real video track has an id that is not the sentinel 'no' value.
+      final hasVideo = tracks.video.any((t) => t.id != 'no');
+      _update((s) => s.copyWith(hasVideo: hasVideo));
+    }));
   }
 
   Future<void> playEntry(QueueEntry entry) async {
@@ -55,6 +60,7 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
           status: PlayerStatus.loading,
           position: Duration.zero,
           duration: Duration.zero,
+          hasVideo: false,
         ));
 
     await _player.open(Media(song.filePath));

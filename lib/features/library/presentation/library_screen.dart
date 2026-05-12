@@ -267,6 +267,8 @@ class _SongListView extends ConsumerWidget {
       children: [
         // Stats bar
         _StatsBar(state: state),
+        // Duplicate warning banner
+        _DuplicatesBanner(),
         // Search
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -436,6 +438,198 @@ class _EmptySearch extends StatelessWidget {
           Gap(12),
           Text('No songs match your search',
               style: TextStyle(color: Colors.white38)),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Duplicates Banner ────────────────────────────────────────────────────────
+
+class _DuplicatesBanner extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final dupsAsync = ref.watch(duplicatesProvider);
+    return dupsAsync.when(
+      data: (groups) {
+        if (groups.isEmpty) return const SizedBox.shrink();
+        final count = groups.values.fold(0, (sum, g) => sum + g.length);
+        return InkWell(
+          onTap: () => _showDuplicatesSheet(context, groups),
+          child: Container(
+            width: double.infinity,
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            color: AppTheme.error.withValues(alpha: 0.15),
+            child: Row(
+              children: [
+                const Icon(Icons.content_copy,
+                    size: 16, color: AppTheme.error),
+                const Gap(8),
+                Expanded(
+                  child: Text(
+                    '$count songs in ${groups.length} duplicate group${groups.length > 1 ? 's' : ''} — tap to review',
+                    style: const TextStyle(
+                        color: AppTheme.error, fontSize: 12),
+                  ),
+                ),
+                const Icon(Icons.chevron_right,
+                    size: 16, color: AppTheme.error),
+              ],
+            ),
+          ),
+        );
+      },
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+    );
+  }
+
+  void _showDuplicatesSheet(
+      BuildContext context, Map<String, List<Song>> groups) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.4,
+        maxChildSize: 0.92,
+        expand: false,
+        builder: (ctx, sc) => ClipRRect(
+          borderRadius:
+              const BorderRadius.vertical(top: Radius.circular(20)),
+          child: _DuplicatesSheet(groups: groups, scrollController: sc),
+        ),
+      ),
+    );
+  }
+}
+
+class _DuplicatesSheet extends ConsumerWidget {
+  const _DuplicatesSheet(
+      {required this.groups, required this.scrollController});
+
+  final Map<String, List<Song>> groups;
+  final ScrollController scrollController;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final allEntries = groups.entries.toList();
+    return Material(
+      color: AppTheme.surface,
+      child: Column(
+        children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 8, 0),
+            child: Row(
+              children: [
+                const Icon(Icons.content_copy,
+                    size: 18, color: AppTheme.error),
+                const Gap(8),
+                const Expanded(
+                  child: Text(
+                    'Duplicate Songs',
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white54),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Text(
+              'Songs with the same title but different file paths. '
+              'Keep the version you want and delete the rest.',
+              style: TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+          ),
+          const Divider(color: Colors.white12),
+          Expanded(
+            child: ListView.builder(
+              controller: scrollController,
+              padding: const EdgeInsets.all(16),
+              itemCount: allEntries.length,
+              itemBuilder: (ctx, i) {
+                final title = allEntries[i].key;
+                final songs = allEntries[i].value;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6, top: 4),
+                      child: Text(
+                        songs.first.title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.secondary,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    ...songs.map((song) => Padding(
+                          padding: const EdgeInsets.only(bottom: 6),
+                          child: NeonCard(
+                            child: ListTile(
+                              dense: true,
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 2),
+                              leading: Icon(
+                                song.hasVideo
+                                    ? Icons.videocam_outlined
+                                    : Icons.music_note,
+                                color: Colors.white38,
+                                size: 18,
+                              ),
+                              title: Text(
+                                song.filePath.split('/').last,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 12, color: Colors.white70),
+                              ),
+                              subtitle: Text(
+                                song.filePath,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 10, color: Colors.white30),
+                              ),
+                              trailing: IconButton(
+                                icon: const Icon(Icons.delete_outline,
+                                    size: 18, color: AppTheme.error),
+                                onPressed: () async {
+                                  if (song.id != null) {
+                                    await ref
+                                        .read(songRepositoryProvider)
+                                        .delete(song.id!);
+                                    ref.invalidate(libraryProvider);
+                                    ref.invalidate(duplicatesProvider);
+                                    if (context.mounted &&
+                                        groups[title]!.length <= 1) {
+                                      Navigator.of(context).pop();
+                                    }
+                                  }
+                                },
+                              ),
+                            ),
+                          ),
+                        )),
+                    if (i < allEntries.length - 1)
+                      const Divider(color: Colors.white12),
+                  ],
+                );
+              },
+            ),
+          ),
         ],
       ),
     );

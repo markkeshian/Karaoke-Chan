@@ -59,12 +59,26 @@ class FolderScanner {
     return songs;
   }
 
-  /// Same as [scan] but yields results as they are found (for progress UI).
-  Stream<ScannedSong> scanStream(String rootPath) async* {
-    final buffer = <ScannedSong>[];
-    await _walk(Directory(rootPath), buffer);
-    for (final song in buffer) {
-      yield song;
+  /// Same as [scan] but yields each file as it is discovered (true streaming).
+  /// Suitable for driving a live progress indicator.
+  Stream<ScannedSong> scanStream(String rootPath) {
+    return _walkStream(Directory(rootPath));
+  }
+
+  Stream<ScannedSong> _walkStream(Directory dir) async* {
+    try {
+      await for (final entity in dir.list(recursive: false)) {
+        if (entity is Directory) {
+          yield* _walkStream(entity);
+        } else if (entity is File) {
+          final ext = p.extension(entity.path).toLowerCase();
+          if (_supportedExtensions.contains(ext)) {
+            yield ScannedSong.fromFile(entity);
+          }
+        }
+      }
+    } catch (_) {
+      // Skip unreadable directories (permission errors on Android, etc.)
     }
   }
 

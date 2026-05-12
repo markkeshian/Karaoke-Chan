@@ -11,6 +11,7 @@ class Song {
     this.coverArtPath,
     this.playCount = 0,
     this.lastPlayedAt,
+    this.hasVideo = false,
     DateTime? addedAt,
   }) : addedAt = addedAt ?? DateTime.now();
 
@@ -23,6 +24,8 @@ class Song {
   final String? coverArtPath;
   final int playCount;
   final DateTime? lastPlayedAt;
+  /// Whether this song file contains a video track (stored in DB).
+  final bool hasVideo;
   final DateTime addedAt;
 
   Song copyWith({
@@ -35,6 +38,7 @@ class Song {
     String? coverArtPath,
     int? playCount,
     DateTime? lastPlayedAt,
+    bool? hasVideo,
     DateTime? addedAt,
   }) {
     return Song(
@@ -47,6 +51,7 @@ class Song {
       coverArtPath: coverArtPath ?? this.coverArtPath,
       playCount: playCount ?? this.playCount,
       lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
+      hasVideo: hasVideo ?? this.hasVideo,
       addedAt: addedAt ?? this.addedAt,
     );
   }
@@ -64,6 +69,7 @@ class Song {
       lastPlayedAt: map['last_played_at'] != null
           ? DateTime.parse(map['last_played_at'] as String)
           : null,
+      hasVideo: (map['has_video'] as int? ?? 0) != 0,
       addedAt: DateTime.parse(map['added_at'] as String),
     );
   }
@@ -78,6 +84,7 @@ class Song {
       'duration_ms': durationMs,
       'cover_art_path': coverArtPath,
       'play_count': playCount,
+      'has_video': hasVideo ? 1 : 0,
       'last_played_at': lastPlayedAt?.toIso8601String(),
       'added_at': addedAt.toIso8601String(),
     };

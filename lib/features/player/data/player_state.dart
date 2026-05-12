@@ -11,6 +11,7 @@ class KaraokePlayerState {
     this.duration = Duration.zero,
     this.volume = 1.0,
     this.errorMessage,
+    this.hasVideo = false,
   });
 
   final QueueEntry? currentEntry;
@@ -19,12 +20,13 @@ class KaraokePlayerState {
   final Duration duration;
   final double volume;
   final String? errorMessage;
+  /// True when media_kit reports at least one real video track for the current media.
+  final bool hasVideo;
 
   bool get isPlaying => status == PlayerStatus.playing;
   bool get isPaused => status == PlayerStatus.paused;
   bool get isIdle => status == PlayerStatus.idle;
   bool get hasError => status == PlayerStatus.error;
-  bool get hasVideo => false; // updated by PlayerNotifier when video track detected
 
   double get progressFraction {
     if (duration == Duration.zero) return 0.0;
@@ -38,7 +40,9 @@ class KaraokePlayerState {
     Duration? duration,
     double? volume,
     String? errorMessage,
+    bool? hasVideo,
     bool clearEntry = false,
+    bool clearError = false,
   }) {
     return KaraokePlayerState(
       currentEntry: clearEntry ? null : (currentEntry ?? this.currentEntry),
@@ -46,7 +50,8 @@ class KaraokePlayerState {
       position: position ?? this.position,
       duration: duration ?? this.duration,
       volume: volume ?? this.volume,
-      errorMessage: errorMessage ?? this.errorMessage,
+      errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      hasVideo: hasVideo ?? this.hasVideo,
     );
   }
 }

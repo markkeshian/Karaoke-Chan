@@ -2,12 +2,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gap/gap.dart';
-import 'package:go_router/go_router.dart';
 import 'package:reorderables/reorderables.dart';
 
-import 'package:karaoke_chan/core/router/app_router.dart';
 import 'package:karaoke_chan/core/theme/app_theme.dart';
 import 'package:karaoke_chan/core/widgets/neon_card.dart';
+import 'package:karaoke_chan/features/queue/presentation/add_song_screen.dart';
 import 'package:karaoke_chan/features/player/data/player_notifier.dart';
 import 'package:karaoke_chan/features/queue/data/queue_entry_model.dart';
 import 'package:karaoke_chan/features/queue/data/queue_notifier.dart';
@@ -45,7 +44,7 @@ class QueueScreen extends ConsumerWidget {
         error: (e, _) => Center(child: Text('Error: $e')),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => context.push(AppRoutes.addSong),
+        onPressed: () => showAddSongSheet(context),
         backgroundColor: AppTheme.primary,
         foregroundColor: Colors.black,
         icon: const Icon(Icons.add),
