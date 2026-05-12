@@ -135,8 +135,7 @@ void main() {
     });
 
     test('getTopPlayed returns songs ordered by play count', () async {
-      final a = await repo
-          .insert(song0(title: 'Rarely Played', filePath: '/rare.mp4'));
+      await repo.insert(song0(title: 'Rarely Played', filePath: '/rare.mp4'));
       final b = await repo
           .insert(song0(title: 'Often Played', filePath: '/often.mp4'));
 

@@ -4,8 +4,6 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
-import 'package:karaoke_chan/core/services/folder_scanner.dart';
-
 /// Watches a folder tree for new or deleted karaoke files and emits
 /// [FolderChangeEvent]s so the library can update without manual refresh.
 class FileWatcherService {

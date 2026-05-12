@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
+import 'package:karaoke_chan/features/library/data/song_model.dart';
 import 'package:karaoke_chan/features/queue/data/queue_entry_model.dart';
+import 'package:karaoke_chan/features/queue/data/queue_notifier.dart';
 import 'package:karaoke_chan/features/queue/data/queue_repository.dart';
 import 'package:karaoke_chan/features/library/data/song_repository.dart';
 import 'package:karaoke_chan/features/player/data/player_state.dart';
@@ -94,6 +96,20 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
     }
     await _player.stop();
     _update((s) => s.copyWith(status: PlayerStatus.idle, clearEntry: true));
+  }
+
+  /// Enqueues [song] and immediately plays it, regardless of what is in the
+  /// queue. Used by the single-screen stage when the user taps a song while
+  /// nothing is playing.
+  Future<void> playNow(Song song) async {
+    if (_disposed) return;
+    if (song.id == null) return;
+    // Enqueue so the DB has a proper record (auto-advance uses queue).
+    final entry = await ref.read(queueRepositoryProvider).enqueue(song.id!);
+    // Attach the full Song object so the UI can show title/artist immediately.
+    await playEntry(entry.copyWith(song: song));
+    // Refresh queue UI.
+    ref.invalidate(queueNotifierProvider);
   }
 
   Future<void> _onTrackCompleted() async {
