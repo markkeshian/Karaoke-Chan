@@ -52,6 +52,36 @@ class SongRepository {
     return song.copyWith(id: id);
   }
 
+  /// Inserts a list of songs in a single transaction — much faster than
+  /// calling [insert] in a loop for large libraries.
+  Future<List<Song>> insertAll(List<Song> songs) async {
+    final List<Song> inserted = [];
+    await _db.db.transaction((txn) async {
+      for (final song in songs) {
+        final id = await txn.rawInsert(
+          '''INSERT OR REPLACE INTO songs
+             (title, artist, file_path, folder_name, duration_ms, cover_art_path,
+              play_count, last_played_at, has_video, added_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+          [
+            song.title,
+            song.artist,
+            song.filePath,
+            song.folderName,
+            song.durationMs,
+            song.coverArtPath,
+            song.playCount,
+            song.lastPlayedAt?.toIso8601String(),
+            song.hasVideo ? 1 : 0,
+            song.addedAt.toIso8601String(),
+          ],
+        );
+        inserted.add(song.copyWith(id: id));
+      }
+    });
+    return inserted;
+  }
+
   Future<void> update(Song song) async {
     await _db.db.update(
       'songs',
@@ -66,8 +96,7 @@ class SongRepository {
   }
 
   Future<void> deleteByPath(String filePath) async {
-    await _db.db
-        .delete('songs', where: 'file_path = ?', whereArgs: [filePath]);
+    await _db.db.delete('songs', where: 'file_path = ?', whereArgs: [filePath]);
   }
 
   /// Remove all songs whose file path starts with [rootPath]

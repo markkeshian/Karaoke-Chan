@@ -2,8 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
-import '../router/app_router.dart';
-import '../theme/app_theme.dart';
+import 'package:karaoke_chan/core/router/app_router.dart';
+import 'package:karaoke_chan/core/theme/app_theme.dart';
 
 class ScaffoldWithNav extends StatelessWidget {
   const ScaffoldWithNav({super.key, required this.child});

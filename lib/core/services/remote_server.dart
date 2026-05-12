@@ -61,24 +61,28 @@ class RemoteQueueServer {
     final q = request.url.queryParameters['q'] ?? '';
     final repo = _ref.read(songRepositoryProvider);
     final songs = await repo.getAll(search: q.isEmpty ? null : q);
-    final body = jsonEncode(songs.map((s) => {
-          'id': s.id,
-          'title': s.title,
-          'artist': s.artist ?? '',
-          'folder': s.folderName ?? '',
-          'duration': s.displayDuration,
-        }).toList());
+    final body = jsonEncode(songs
+        .map((s) => {
+              'id': s.id,
+              'title': s.title,
+              'artist': s.artist ?? '',
+              'folder': s.folderName ?? '',
+              'duration': s.displayDuration,
+            })
+        .toList());
     return Response.ok(body, headers: {'content-type': 'application/json'});
   }
 
   Future<Response> _handleGetQueue(Request request) async {
     final entries = await _ref.read(queueRepositoryProvider).getActive();
-    final body = jsonEncode(entries.map((e) => {
-          'position': e.position,
-          'song': e.song?.title ?? 'Unknown',
-          'artist': e.song?.artist ?? '',
-          'status': e.status.name,
-        }).toList());
+    final body = jsonEncode(entries
+        .map((e) => {
+              'position': e.position,
+              'song': e.song?.title ?? 'Unknown',
+              'artist': e.song?.artist ?? '',
+              'status': e.status.name,
+            })
+        .toList());
     return Response.ok(body, headers: {'content-type': 'application/json'});
   }
 
@@ -88,7 +92,8 @@ class RemoteQueueServer {
       final data = jsonDecode(raw) as Map<String, dynamic>;
       final songId = data['song_id'];
       if (songId == null) {
-        return Response(400, body: '{"error":"song_id required"}',
+        return Response(400,
+            body: '{"error":"song_id required"}',
             headers: {'content-type': 'application/json'});
       }
       await _ref.read(queueNotifierProvider.notifier).enqueue(songId as int);
@@ -104,7 +109,8 @@ class RemoteQueueServer {
   Future<Response> _handleGetUi(Request request) async {
     final ip = await localIp ?? 'localhost';
     final html = _buildMobileUi(ip);
-    return Response.ok(html, headers: {'content-type': 'text/html; charset=utf-8'});
+    return Response.ok(html,
+        headers: {'content-type': 'text/html; charset=utf-8'});
   }
 
   String _buildMobileUi(String ip) => '''<!DOCTYPE html>
@@ -172,10 +178,10 @@ function renderSongs(songs) {
   const st = document.getElementById('status');
   if (!songs.length) { ul.innerHTML=''; st.textContent='No songs found'; return; }
   st.textContent='';
-  ul.innerHTML = songs.map(s => \`<li class="song-item" onclick="addSong(\${s.id})">
+  ul.innerHTML = songs.map(s => `<li class="song-item" onclick="addSong(\${s.id})">
     <div class="song-title">\${esc(s.title)}</div>
     <div class="song-sub">\${esc(s.artist || s.folder)}</div>
-  </li>\`).join('');
+  </li>`).join('');
 }
 
 async function addSong(id) {
@@ -196,13 +202,13 @@ async function loadQueue() {
     const entries = await r.json();
     const el = document.getElementById('queue-list');
     if (!entries.length) { el.innerHTML='<p class="empty">Queue is empty</p>'; return; }
-    el.innerHTML = entries.map(e => \`<div class="queue-item">
+    el.innerHTML = entries.map(e => `<div class="queue-item">
       <div class="q-num">\${e.position}</div>
       <div>
         <div style="font-weight:600;font-size:.9rem">\${esc(e.song)}</div>
         <div style="color:#888;font-size:.8rem">\${esc(e.artist)}</div>
       </div>
-    </div>\`).join('');
+    </div>`).join('');
   } catch(_) {}
 }
 

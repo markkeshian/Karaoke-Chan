@@ -13,14 +13,19 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   late Player _player;
   VideoController? videoController;
   final List<StreamSubscription> _subs = [];
+  bool _disposed = false;
 
   @override
   Future<KaraokePlayerState> build() async {
+    _disposed = false;
     _player = Player();
     videoController = VideoController(_player);
     _attachListeners();
     ref.onDispose(() {
-      for (final s in _subs) s.cancel();
+      _disposed = true;
+      for (final s in _subs) {
+        s.cancel();
+      }
       _player.dispose();
     });
     return const KaraokePlayerState();
@@ -52,6 +57,7 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   }
 
   Future<void> playEntry(QueueEntry entry) async {
+    if (_disposed) return;
     final song = entry.song;
     if (song == null) return;
 
@@ -114,4 +120,5 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
 }
 
 final playerProvider =
-    AsyncNotifierProvider<PlayerNotifier, KaraokePlayerState>(PlayerNotifier.new);
+    AsyncNotifierProvider<PlayerNotifier, KaraokePlayerState>(
+        PlayerNotifier.new);

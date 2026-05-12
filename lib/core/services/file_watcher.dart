@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
-import 'folder_scanner.dart';
+import 'package:karaoke_chan/core/services/folder_scanner.dart';
 
 /// Watches a folder tree for new or deleted karaoke files and emits
 /// [FolderChangeEvent]s so the library can update without manual refresh.
@@ -47,8 +47,18 @@ class FileWatcherService {
   static bool _isKaraokeFile(String path) {
     final ext = p.extension(path).toLowerCase();
     const supported = {
-      '.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v',
-      '.mp3', '.flac', '.ogg', '.wav', '.m4a', '.aac',
+      '.mp4',
+      '.mkv',
+      '.avi',
+      '.mov',
+      '.webm',
+      '.m4v',
+      '.mp3',
+      '.flac',
+      '.ogg',
+      '.wav',
+      '.m4a',
+      '.aac',
     };
     return supported.contains(ext);
   }

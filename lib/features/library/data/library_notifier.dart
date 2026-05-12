@@ -71,7 +71,8 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
     // Start file watcher
     _startWatcher(folder);
 
-    return LibraryState(folderPath: folder, songs: songs, status: ScanStatus.done);
+    return LibraryState(
+        folderPath: folder, songs: songs, status: ScanStatus.done);
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────
@@ -81,7 +82,8 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
     final path = await manager.pickFolder();
     if (path == null) return;
 
-    _update((s) => s.copyWith(folderPath: path, songs: const [], status: ScanStatus.idle));
+    _update((s) =>
+        s.copyWith(folderPath: path, songs: const [], status: ScanStatus.idle));
     await scanFolder();
   }
 
@@ -97,25 +99,26 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
 
       final songRepo = ref.read(songRepositoryProvider);
 
-      // Bulk-upsert: delete songs from this folder path root, re-insert
+      // Bulk-upsert: delete songs from this folder path root, then re-insert
+      // all in a single transaction for performance.
       await songRepo.deleteByFolderRoot(folderPath);
-      final inserted = <Song>[];
-      for (int i = 0; i < scanned.length; i++) {
-        final s = scanned[i];
-        final song = await songRepo.insert(Song(
-          title: s.title,
-          artist: s.artist,
-          filePath: s.filePath,
-          folderName: s.folderName,
-        ));
-        inserted.add(song);
-        _update((st) => st.copyWith(scannedCount: i + 1, totalCount: scanned.length));
-      }
+      _update((s) => s.copyWith(totalCount: scanned.length));
+
+      final songModels = scanned
+          .map((s) => Song(
+                title: s.title,
+                artist: s.artist,
+                filePath: s.filePath,
+                folderName: s.folderName,
+              ))
+          .toList();
+      final inserted = await songRepo.insertAll(songModels);
 
       _startWatcher(folderPath);
 
       _update((s) => s.copyWith(
             songs: inserted,
+            scannedCount: inserted.length,
             status: ScanStatus.done,
             lastScanTime: DateTime.now(),
           ));
@@ -131,12 +134,11 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
     final manager = ref.read(folderManagerProvider);
     await manager.clearFolder();
     _watcherSub?.cancel();
-    _update((s) => LibraryState());
+    _update((s) => const LibraryState());
     await pickFolder();
   }
 
   Future<void> search(String query) async {
-    final folderPath = state.value?.folderPath;
     final songs = await ref
         .read(songRepositoryProvider)
         .getAll(search: query.isEmpty ? null : query);
@@ -161,14 +163,19 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
   Future<void> _onFileAdded(String filePath) async {
     final songRepo = ref.read(songRepositoryProvider);
     final scanned = ScannedSong.fromFile(File(filePath));
-    final song = await songRepo.insert(Song(
-      title: scanned.title,
-      artist: scanned.artist,
-      filePath: scanned.filePath,
-      folderName: scanned.folderName,
-    ));
-    _update((s) => s.copyWith(songs: [...s.songs, song]
-      ..sort((a, b) => a.title.compareTo(b.title))));
+    try {
+      final song = await songRepo.insert(Song(
+        title: scanned.title,
+        artist: scanned.artist,
+        filePath: scanned.filePath,
+        folderName: scanned.folderName,
+      ));
+      _update((s) => s.copyWith(
+          songs: [...s.songs, song]
+            ..sort((a, b) => a.title.compareTo(b.title))));
+    } catch (_) {
+      // File already in DB (e.g. duplicate watcher event) — no-op.
+    }
   }
 
   Future<void> _onFileRemoved(String filePath) async {

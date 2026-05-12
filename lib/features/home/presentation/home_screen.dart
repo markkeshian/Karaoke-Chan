@@ -64,17 +64,17 @@ class HomeScreen extends ConsumerWidget {
       expandedHeight: 120,
       floating: true,
       backgroundColor: AppTheme.background,
-      flexibleSpace: FlexibleSpaceBar(
-        title: const Text(
+      flexibleSpace: const FlexibleSpaceBar(
+        title: Text(
           'Karaoke Chan',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
-        titlePadding: const EdgeInsets.only(left: 16, bottom: 16),
+        titlePadding: EdgeInsets.only(left: 16, bottom: 16),
       ),
       actions: [
         IconButton(
           icon: const Icon(Icons.settings_outlined),
-          onPressed: () => context.push(AppRoutes.settings),
+          onPressed: () => context.go(AppRoutes.settings),
         ),
       ],
     );
@@ -100,24 +100,25 @@ class _WelcomeBanner extends StatelessWidget {
           color: AppTheme.primary.withValues(alpha: 0.2),
         ),
       ),
-      child: Column(
+      child: const Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             '🎤 Ready to Sing?',
             style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
           ),
-          const Gap(8),
-          const Text(
+          Gap(8),
+          Text(
             'Add songs to the queue to start your karaoke session.',
             style: TextStyle(color: Colors.white70, fontSize: 15),
           ),
-          const Gap(16),
+          Gap(16),
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: const [
-              _TipChip(icon: Icons.folder_open, label: 'Pick a folder in Library'),
+            children: [
+              _TipChip(
+                  icon: Icons.folder_open, label: 'Pick a folder in Library'),
               _TipChip(icon: Icons.search, label: 'Search songs'),
               _TipChip(icon: Icons.queue_music, label: 'Add to queue'),
               _TipChip(icon: Icons.wifi, label: 'Remote queue via phone'),
@@ -147,7 +148,8 @@ class _TipChip extends StatelessWidget {
         children: [
           Icon(icon, size: 14, color: AppTheme.primary),
           const Gap(6),
-          Text(label, style: const TextStyle(fontSize: 12, color: Colors.white70)),
+          Text(label,
+              style: const TextStyle(fontSize: 12, color: Colors.white70)),
         ],
       ),
     );
@@ -169,13 +171,15 @@ class _NowPlayingBanner extends ConsumerWidget {
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [AppTheme.primary.withValues(alpha: 0.25), AppTheme.surface],
+            colors: [
+              AppTheme.primary.withValues(alpha: 0.25),
+              AppTheme.surface
+            ],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
           borderRadius: BorderRadius.circular(20),
-          border:
-              Border.all(color: AppTheme.primary.withValues(alpha: 0.3)),
+          border: Border.all(color: AppTheme.primary.withValues(alpha: 0.3)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -189,7 +193,8 @@ class _NowPlayingBanner extends ConsumerWidget {
                     color: AppTheme.primary.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Icon(Icons.music_note, color: AppTheme.primary, size: 24),
+                  child: const Icon(Icons.music_note,
+                      color: AppTheme.primary, size: 24),
                 ),
                 const Gap(12),
                 Expanded(
@@ -239,8 +244,7 @@ class _NowPlayingBanner extends ConsumerWidget {
               child: LinearProgressIndicator(
                 value: state.progressFraction,
                 backgroundColor: Colors.white12,
-                valueColor:
-                    const AlwaysStoppedAnimation(AppTheme.primary),
+                valueColor: const AlwaysStoppedAnimation(AppTheme.primary),
                 minHeight: 4,
               ),
             ),
@@ -257,10 +261,8 @@ class _QueuePreview extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final upcoming = entries
-        .where((e) => e.status == QueueStatus.waiting)
-        .take(5)
-        .toList();
+    final upcoming =
+        entries.where((e) => e.status == QueueStatus.waiting).take(5).toList();
 
     if (upcoming.isEmpty) return const SizedBox.shrink();
 

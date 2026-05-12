@@ -55,9 +55,7 @@ class _AddSongSheetContentState extends ConsumerState<_AddSongSheetContent> {
     if (_selected == null) return;
     setState(() => _loading = true);
     try {
-      await ref
-          .read(queueNotifierProvider.notifier)
-          .addToQueue(_selected!.id!);
+      await ref.read(queueNotifierProvider.notifier).enqueue(_selected!.id!);
       if (mounted) Navigator.of(context).pop();
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -152,9 +150,8 @@ class _AddSongSheetContentState extends ConsumerState<_AddSongSheetContent> {
                             isSelected
                                 ? Icons.radio_button_checked
                                 : Icons.radio_button_unchecked,
-                            color: isSelected
-                                ? AppTheme.primary
-                                : Colors.white24,
+                            color:
+                                isSelected ? AppTheme.primary : Colors.white24,
                           ),
                           title: Text(
                             song.title,
@@ -189,8 +186,7 @@ class _AddSongSheetContentState extends ConsumerState<_AddSongSheetContent> {
                   },
                 );
               },
-              loading: () =>
-                  const Center(child: CircularProgressIndicator()),
+              loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => Center(child: Text('Error: $e')),
             ),
           ),

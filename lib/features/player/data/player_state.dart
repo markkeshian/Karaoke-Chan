@@ -1,5 +1,5 @@
 // lib/features/player/data/player_state.dart
-import '../../queue/data/queue_entry_model.dart';
+import 'package:karaoke_chan/features/queue/data/queue_entry_model.dart';
 
 enum PlayerStatus { idle, loading, playing, paused, error }
 
@@ -20,6 +20,7 @@ class KaraokePlayerState {
   final Duration duration;
   final double volume;
   final String? errorMessage;
+
   /// True when media_kit reports at least one real video track for the current media.
   final bool hasVideo;
 

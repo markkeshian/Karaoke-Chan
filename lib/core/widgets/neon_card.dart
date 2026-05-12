@@ -1,6 +1,6 @@
 // lib/core/widgets/neon_card.dart
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
+import 'package:karaoke_chan/core/theme/app_theme.dart';
 
 class NeonCard extends StatelessWidget {
   const NeonCard({

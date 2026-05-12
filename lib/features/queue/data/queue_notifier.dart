@@ -27,9 +27,17 @@ class QueueNotifier extends AsyncNotifier<List<QueueEntry>> {
   }
 
   Future<void> reorder(List<QueueEntry> entries) async {
-    final ids = entries.map((e) => e.id!).toList();
-    await ref.read(queueRepositoryProvider).reorder(ids);
-    state = AsyncData(entries); // optimistic update
+    // Apply optimistic update immediately so the UI feels instant.
+    final previous = state;
+    state = AsyncData(entries);
+    try {
+      final ids = entries.map((e) => e.id!).toList();
+      await ref.read(queueRepositoryProvider).reorder(ids);
+    } catch (_) {
+      // Persist failed — roll back to previous state.
+      state = previous;
+      rethrow;
+    }
   }
 
   Future<void> clearAll() async {

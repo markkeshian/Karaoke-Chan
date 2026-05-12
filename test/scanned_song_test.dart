@@ -16,13 +16,13 @@ void main() {
       await tempDir?.delete(recursive: true);
     });
 
-    File _makeFile(String name) {
+    File makeFile(String name) {
       final path = p.join(tempDir!.path, name);
       return File(path)..createSync();
     }
 
     test('parses "Artist - Title" pattern', () {
-      final file = _makeFile('Rick Astley - Never Gonna Give You Up.mp4');
+      final file = makeFile('Rick Astley - Never Gonna Give You Up.mp4');
       final song = ScannedSong.fromFile(file);
 
       expect(song.artist, 'Rick Astley');
@@ -31,7 +31,7 @@ void main() {
     });
 
     test('uses full filename as title when no dash separator', () {
-      final file = _makeFile('Bohemian Rhapsody.mp4');
+      final file = makeFile('Bohemian Rhapsody.mp4');
       final song = ScannedSong.fromFile(file);
 
       expect(song.artist, isNull);
@@ -39,7 +39,7 @@ void main() {
     });
 
     test('uses first dash occurrence for artist/title split', () {
-      final file = _makeFile('AC-DC - Thunderstruck.mp4');
+      final file = makeFile('AC-DC - Thunderstruck.mp4');
       final song = ScannedSong.fromFile(file);
 
       // "AC-DC" has no space/dash, but " - " is the separator
@@ -48,7 +48,7 @@ void main() {
     });
 
     test('trims whitespace from artist and title', () {
-      final file = _makeFile('  The Beatles  -  Hey Jude  .mp4');
+      final file = makeFile('  The Beatles  -  Hey Jude  .mp4');
       final song = ScannedSong.fromFile(file);
 
       expect(song.artist, 'The Beatles');
@@ -56,7 +56,7 @@ void main() {
     });
 
     test('sets folderName to the parent directory name', () {
-      final file = _makeFile('test.mp4');
+      final file = makeFile('test.mp4');
       final song = ScannedSong.fromFile(file);
 
       expect(song.folderName, p.basename(tempDir!.path));
@@ -150,4 +150,3 @@ void main() {
     });
   });
 }
-

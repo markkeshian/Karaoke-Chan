@@ -1,8 +1,8 @@
 // lib/core/database/database_helper.dart
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
-import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 class DatabaseHelper {
@@ -10,30 +10,48 @@ class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._();
 
   static Database? _db;
+  // Prevents concurrent calls to init() from opening the database twice.
+  static Completer<void>? _initCompleter;
 
   Database get db {
-    if (_db == null) throw StateError('Database not initialized. Call init() first.');
+    if (_db == null) {
+      throw StateError('Database not initialized. Call init() first.');
+    }
     return _db!;
   }
 
   Future<void> init() async {
     if (_db != null) return;
 
-    // Use FFI for desktop platforms
-    if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
-      sqfliteFfiInit();
-      databaseFactory = databaseFactoryFfi;
+    // If another init() is already in progress, wait for it to finish.
+    if (_initCompleter != null) {
+      return _initCompleter!.future;
     }
+    _initCompleter = Completer<void>();
 
-    final dbPath = await getDatabasesPath();
-    final path = join(dbPath, 'karaoke_chan.db');
+    try {
+      // Use FFI for desktop platforms
+      if (!kIsWeb &&
+          (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
+        sqfliteFfiInit();
+        databaseFactory = databaseFactoryFfi;
+      }
 
-    _db = await openDatabase(
-      path,
-      version: 2,
-      onCreate: _onCreate,
-      onUpgrade: _onUpgrade,
-    );
+      final dbPath = await getDatabasesPath();
+      final path = join(dbPath, 'karaoke_chan.db');
+
+      _db = await openDatabase(
+        path,
+        version: 2,
+        onCreate: _onCreate,
+        onUpgrade: _onUpgrade,
+      );
+      _initCompleter!.complete();
+    } catch (e, st) {
+      _initCompleter!.completeError(e, st);
+      _initCompleter = null;
+      rethrow;
+    }
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -66,7 +84,8 @@ class DatabaseHelper {
       )
     ''');
 
-    await db.execute('CREATE INDEX idx_queue_position ON queue_entries(position)');
+    await db
+        .execute('CREATE INDEX idx_queue_position ON queue_entries(position)');
     await db.execute('CREATE INDEX idx_queue_status ON queue_entries(status)');
     await db.execute('CREATE INDEX idx_songs_title ON songs(title)');
   }
