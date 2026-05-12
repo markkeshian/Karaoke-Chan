@@ -59,7 +59,8 @@ class QueueRepository {
     await _db.db.update(
       'queue_entries',
       {'status': 'playing', 'started_at': DateTime.now().toIso8601String()},
-      where: 'id = ?', whereArgs: [id],
+      where: 'id = ?',
+      whereArgs: [id],
     );
   }
 
@@ -67,7 +68,8 @@ class QueueRepository {
     await _db.db.update(
       'queue_entries',
       {'status': 'done', 'finished_at': DateTime.now().toIso8601String()},
-      where: 'id = ?', whereArgs: [id],
+      where: 'id = ?',
+      whereArgs: [id],
     );
   }
 
@@ -75,7 +77,8 @@ class QueueRepository {
     await _db.db.update(
       'queue_entries',
       {'status': 'skipped', 'finished_at': DateTime.now().toIso8601String()},
-      where: 'id = ?', whereArgs: [id],
+      where: 'id = ?',
+      whereArgs: [id],
     );
   }
 
@@ -95,6 +98,17 @@ class QueueRepository {
 
   Future<void> clearAll() async {
     await _db.db.delete('queue_entries');
+  }
+
+  /// Called on app startup: any entry left in 'playing' state is from a
+  /// previous session (app was closed mid-song). Reset them to 'waiting' so
+  /// they can be played again, rather than showing as phantom queue items.
+  Future<void> resetStalePlaying() async {
+    await _db.db.update(
+      'queue_entries',
+      {'status': 'waiting', 'started_at': null},
+      where: "status = 'playing'",
+    );
   }
 
   Future<void> _reorder() async {

@@ -8,6 +8,9 @@ import 'package:karaoke_chan/core/services/folder_manager.dart';
 import 'package:karaoke_chan/core/services/folder_scanner.dart';
 import 'package:karaoke_chan/features/library/data/song_model.dart';
 import 'package:karaoke_chan/features/library/data/song_repository.dart';
+import 'package:karaoke_chan/features/player/data/player_notifier.dart';
+import 'package:karaoke_chan/features/queue/data/queue_notifier.dart';
+import 'package:karaoke_chan/features/queue/data/queue_repository.dart';
 
 enum ScanStatus { idle, scanning, done, error }
 
@@ -99,6 +102,17 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
 
       final songRepo = ref.read(songRepositoryProvider);
 
+      // Safety guard: never wipe the DB if the scan found nothing.
+      // This protects against sandbox / permission failures.
+      if (scanned.isEmpty) {
+        _update((s) => s.copyWith(
+              status: ScanStatus.error,
+              errorMessage:
+                  'No files found in "$folderPath". Check folder permissions.',
+            ));
+        return;
+      }
+
       // Bulk-upsert: delete songs from this folder path root, then re-insert
       // all in a single transaction for performance.
       await songRepo.deleteByFolderRoot(folderPath);
@@ -136,6 +150,29 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
     _watcherSub?.cancel();
     _update((s) => const LibraryState());
     await pickFolder();
+  }
+
+  /// Full app reset: stops the player, wipes the queue, clears all songs,
+  /// clears the saved folder path, and resets state — showing the folder picker.
+  Future<void> resetToStart() async {
+    // 1. Stop player immediately (prevents audio continuing after reset).
+    await ref.read(playerProvider.notifier).stopToIdle();
+
+    // 2. Wipe queue from DB and invalidate its provider so the UI clears.
+    await ref.read(queueRepositoryProvider).clearAll();
+    ref.invalidate(queueNotifierProvider);
+
+    // 3. Stop file watcher.
+    _watcherSub?.cancel();
+
+    // 4. Clear saved folder path from SharedPreferences.
+    await ref.read(folderManagerProvider).clearFolder();
+
+    // 5. Wipe songs table so the next folder pick starts completely fresh.
+    await ref.read(songRepositoryProvider).deleteAll();
+
+    // 6. Reset library state — KaraokeStage will show the folder picker.
+    _update((s) => const LibraryState());
   }
 
   Future<void> search(String query) async {

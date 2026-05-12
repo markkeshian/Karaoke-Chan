@@ -16,6 +16,9 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   VideoController? videoController;
   final List<StreamSubscription> _subs = [];
   bool _disposed = false;
+  // Prevents _onTrackCompleted from firing while skip/advance is in progress
+  // AND prevents concurrent advances from stacking up.
+  bool _isAdvancing = false;
 
   @override
   Future<KaraokePlayerState> build() async {
@@ -35,9 +38,15 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
 
   void _attachListeners() {
     _subs.add(_player.stream.playing.listen((playing) {
-      _update((s) => s.copyWith(
-            status: playing ? PlayerStatus.playing : PlayerStatus.paused,
-          ));
+      _update((s) {
+        if (playing) return s.copyWith(status: PlayerStatus.playing);
+        // Don't overwrite 'idle' with 'paused' — idle is set explicitly by
+        // _advanceQueue when the queue is empty. The playing=false event from
+        // player.stop() arrives asynchronously AFTER we set idle, and would
+        // otherwise reset it to paused, breaking the "add song → auto-play" flow.
+        if (s.isIdle) return s;
+        return s.copyWith(status: PlayerStatus.paused);
+      });
     }));
     _subs.add(_player.stream.position.listen((pos) {
       _update((s) => s.copyWith(position: pos));
@@ -46,14 +55,21 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
       _update((s) => s.copyWith(duration: dur));
     }));
     _subs.add(_player.stream.completed.listen((completed) {
-      if (completed) _onTrackCompleted();
+      if (completed && !_isAdvancing) _onTrackCompleted();
     }));
     _subs.add(_player.stream.error.listen((err) {
       _update((s) => s.copyWith(status: PlayerStatus.error, errorMessage: err));
     }));
     _subs.add(_player.stream.tracks.listen((tracks) {
       // A real video track has an id that is not the sentinel 'no' value.
-      final hasVideo = tracks.video.any((t) => t.id != 'no');
+      // We update hasVideo whenever the track list changes (e.g. after open()).
+      final hasVideo = tracks.video.any((t) => t.id != 'no' && t.id != '');
+      _update((s) => s.copyWith(hasVideo: hasVideo));
+    }));
+
+    // Also detect video via the track state stream (fires once media is opened).
+    _subs.add(_player.stream.track.listen((track) {
+      final hasVideo = track.video.id != 'no' && track.video.id != '';
       _update((s) => s.copyWith(hasVideo: hasVideo));
     }));
   }
@@ -71,7 +87,7 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
           hasVideo: false,
         ));
 
-    await _player.open(Media(song.filePath));
+    await _player.open(Media(Uri.file(song.filePath).toString()));
 
     if (entry.id != null) {
       await ref.read(queueRepositoryProvider).markPlaying(entry.id!);
@@ -82,6 +98,19 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   Future<void> pause() async => _player.pause();
   Future<void> togglePlayPause() async => _player.playOrPause();
 
+  /// Immediately stops playback and resets to idle without advancing the queue.
+  /// Used by the full app reset flow.
+  Future<void> stopToIdle() async {
+    _isAdvancing = true; // block _onTrackCompleted from firing
+    try {
+      await _player.stop();
+      _update((s) => s.copyWith(
+          status: PlayerStatus.idle, clearEntry: true, hasVideo: false));
+    } finally {
+      _isAdvancing = false;
+    }
+  }
+
   Future<void> seek(Duration position) async => _player.seek(position);
 
   Future<void> setVolume(double volume) async {
@@ -90,12 +119,37 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   }
 
   Future<void> skip() async {
+    if (_isAdvancing) return;
     final current = state.value?.currentEntry;
     if (current?.id != null) {
       await ref.read(queueRepositoryProvider).markSkipped(current!.id!);
     }
-    await _player.stop();
-    _update((s) => s.copyWith(status: PlayerStatus.idle, clearEntry: true));
+    await _advanceQueue(doneEntryId: current?.id);
+  }
+
+  /// Unified advance logic — called by [skip] and [_onTrackCompleted].
+  /// [doneEntryId] is excluded when searching for the next entry (it has
+  /// already been marked done/skipped in the DB by the caller).
+  Future<void> _advanceQueue({required int? doneEntryId}) async {
+    if (_isAdvancing || _disposed) return;
+    _isAdvancing = true;
+    try {
+      final queue = await ref.read(queueRepositoryProvider).getActive();
+      // Exclude the just-finished/skipped entry in case the DB update hasn't
+      // propagated yet (belt-and-suspenders).
+      final next = queue.where((e) => e.id != doneEntryId).firstOrNull;
+
+      if (next != null) {
+        await playEntry(next);
+      } else {
+        await _player.stop();
+        _update((s) => s.copyWith(
+            status: PlayerStatus.idle, clearEntry: true, hasVideo: false));
+      }
+      await ref.read(queueNotifierProvider.notifier).refresh();
+    } finally {
+      _isAdvancing = false;
+    }
   }
 
   /// Enqueues [song] and immediately plays it, regardless of what is in the
@@ -109,10 +163,11 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
     // Attach the full Song object so the UI can show title/artist immediately.
     await playEntry(entry.copyWith(song: song));
     // Refresh queue UI.
-    ref.invalidate(queueNotifierProvider);
+    await ref.read(queueNotifierProvider.notifier).refresh();
   }
 
   Future<void> _onTrackCompleted() async {
+    if (_isAdvancing || _disposed) return;
     final current = state.value?.currentEntry;
     if (current == null) return;
 
@@ -120,14 +175,7 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
       await ref.read(queueRepositoryProvider).markDone(current.id!);
     }
     await ref.read(songRepositoryProvider).incrementPlayCount(current.songId);
-
-    // Auto-advance
-    final queue = await ref.read(queueRepositoryProvider).getActive();
-    if (queue.isNotEmpty) {
-      await playEntry(queue.first);
-    } else {
-      _update((s) => s.copyWith(status: PlayerStatus.idle, clearEntry: true));
-    }
+    await _advanceQueue(doneEntryId: current.id);
   }
 
   void _update(KaraokePlayerState Function(KaraokePlayerState) fn) {

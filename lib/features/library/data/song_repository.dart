@@ -99,6 +99,11 @@ class SongRepository {
     await _db.db.delete('songs', where: 'file_path = ?', whereArgs: [filePath]);
   }
 
+  /// Wipes the entire songs table — used on full app reset.
+  Future<void> deleteAll() async {
+    await _db.db.delete('songs');
+  }
+
   /// Remove all songs whose file path starts with [rootPath]
   /// (i.e. everything from a given scanned folder).
   Future<void> deleteByFolderRoot(String rootPath) async {

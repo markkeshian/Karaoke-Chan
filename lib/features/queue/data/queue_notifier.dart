@@ -5,8 +5,14 @@ import 'package:karaoke_chan/features/queue/data/queue_repository.dart';
 
 class QueueNotifier extends AsyncNotifier<List<QueueEntry>> {
   @override
-  Future<List<QueueEntry>> build() {
-    return ref.watch(queueRepositoryProvider).getActive();
+  Future<List<QueueEntry>> build() async {
+    // Clear ALL queue entries on every startup or hot-restart so sessions
+    // always begin with a clean slate. ref.onDispose also clears when the
+    // provider scope is torn down (hot-restart, app close via lifecycle hook).
+    final repo = ref.read(queueRepositoryProvider);
+    await repo.clearAll();
+    ref.onDispose(() => repo.clearAll());
+    return repo.getActive(); // returns [] immediately after clearAll
   }
 
   Future<void> refresh() async {

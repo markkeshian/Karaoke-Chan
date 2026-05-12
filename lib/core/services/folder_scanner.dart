@@ -83,19 +83,15 @@ class FolderScanner {
   }
 
   Future<void> _walk(Directory dir, List<ScannedSong> out) async {
-    try {
-      await for (final entity in dir.list(recursive: false)) {
-        if (entity is Directory) {
-          await _walk(entity, out);
-        } else if (entity is File) {
-          final ext = p.extension(entity.path).toLowerCase();
-          if (_supportedExtensions.contains(ext)) {
-            out.add(ScannedSong.fromFile(entity));
-          }
+    await for (final entity in dir.list(recursive: false)) {
+      if (entity is Directory) {
+        await _walk(entity, out);
+      } else if (entity is File) {
+        final ext = p.extension(entity.path).toLowerCase();
+        if (_supportedExtensions.contains(ext)) {
+          out.add(ScannedSong.fromFile(entity));
         }
       }
-    } catch (_) {
-      // Skip unreadable directories (permission errors on Android, etc.)
     }
   }
 }

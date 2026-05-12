@@ -2,7 +2,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gap/gap.dart';
+import 'package:go_router/go_router.dart';
 
+import 'package:karaoke_chan/core/router/app_router.dart';
 import 'package:karaoke_chan/core/theme/app_theme.dart';
 import 'package:karaoke_chan/features/library/data/library_notifier.dart';
 import 'package:karaoke_chan/features/queue/data/queue_notifier.dart';
@@ -45,11 +47,11 @@ class SettingsScreen extends ConsumerWidget {
               ),
               const _Divider(),
               _SettingsTile(
-                icon: Icons.radar,
-                iconColor: AppTheme.primary,
-                title: 'Re-scan Folder',
-                subtitle: 'Update library with new or deleted files',
-                onTap: () => ref.read(libraryProvider.notifier).scanFolder(),
+                icon: Icons.restart_alt,
+                iconColor: Colors.orangeAccent,
+                title: 'Restart App',
+                subtitle: 'Clear all cache and return to folder selection',
+                onTap: () => _confirmRestart(context, ref),
               ),
             ],
           ),
@@ -79,8 +81,24 @@ class SettingsScreen extends ConsumerWidget {
               _SettingsTile(
                 icon: Icons.mic,
                 iconColor: AppTheme.primary,
-                title: 'Karaoke Chan',
-                subtitle: 'Version 1.0.0 — Cross-platform offline karaoke',
+                title: 'Karaoke-Chan',
+                subtitle:
+                    'Version 1.0.0 — Cross-platform offline karaoke player',
+              ),
+              _Divider(),
+              _SettingsTile(
+                icon: Icons.info_outline,
+                iconColor: AppTheme.secondary,
+                title: 'Description',
+                subtitle:
+                    'Karaoke-Chan is a local karaoke player designed for browsing, queueing, and playing your karaoke videos from your own folders.',
+              ),
+              _Divider(),
+              _SettingsTile(
+                icon: Icons.person_outline,
+                iconColor: AppTheme.primary,
+                title: 'Developer',
+                subtitle: 'Mark Keshian M. Mangabay',
               ),
               _Divider(),
               _SettingsTile(
@@ -89,9 +107,48 @@ class SettingsScreen extends ConsumerWidget {
                 title: 'Platform Support',
                 subtitle: 'Android · macOS · Windows',
               ),
+              _Divider(),
+              _SettingsTile(
+                icon: Icons.copyright,
+                iconColor: AppTheme.primary,
+                title: 'License',
+                subtitle: '© 2026 Karaoke-Chan. All rights reserved.',
+              ),
             ],
           ),
           const Gap(40),
+        ],
+      ),
+    );
+  }
+
+  void _confirmRestart(BuildContext context, WidgetRef ref) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _cardBg,
+        title:
+            const Text('Restart App?', style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'This will clear all queue entries, remove the saved folder, and return you to the folder selection screen.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child:
+                const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              await ref.read(libraryProvider.notifier).resetToStart();
+              if (context.mounted) context.go(AppRoutes.home);
+            },
+            child: const Text('Restart',
+                style: TextStyle(
+                    color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
+          ),
         ],
       ),
     );

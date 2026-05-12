@@ -14,7 +14,10 @@
 //  └──────────────┴──────────────────────────────────┘
 //  Fullscreen → sidebar + queue panel hidden, video fills screen.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gap/gap.dart';
 import 'package:go_router/go_router.dart';
@@ -50,14 +53,26 @@ class KaraokeStage extends ConsumerStatefulWidget {
 
 class _KaraokeStageState extends ConsumerState<KaraokeStage> {
   final _search = TextEditingController();
+  final _focusNode = FocusNode();
   bool _fullscreen = false;
-  double? _sidebarWidth; // null = use 35% default; set once user drags
+  double? _sidebarWidth;
   double _queueHeight = 220;
 
   @override
   void dispose() {
     _search.dispose();
+    _focusNode.dispose();
     super.dispose();
+  }
+
+  void _handleKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return;
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.keyF) {
+      setState(() => _fullscreen = !_fullscreen);
+    } else if (key == LogicalKeyboardKey.escape && _fullscreen) {
+      setState(() => _fullscreen = false);
+    }
   }
 
   @override
@@ -66,94 +81,113 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
     final playerAsync = ref.watch(playerProvider);
     final queueAsync = ref.watch(queueNotifierProvider);
 
-    return Scaffold(
-      backgroundColor: _bg,
-      body: libraryAsync.when(
-        loading: () =>
-            const Center(child: CircularProgressIndicator(color: _purple)),
-        error: (e, _) => Center(
-            child: Text('Error: $e',
-                style: const TextStyle(color: Colors.white70))),
-        data: (library) {
-          if (!library.hasFolder) {
-            return _FolderPickerView(
-                onPick: () => ref.read(libraryProvider.notifier).pickFolder());
-          }
-          if (library.isScanning) {
-            return _ScanningView(library: library);
-          }
+    return KeyboardListener(
+      focusNode: _focusNode,
+      autofocus: true,
+      onKeyEvent: _handleKey,
+      child: Scaffold(
+        backgroundColor: _bg,
+        body: libraryAsync.when(
+          loading: () =>
+              const Center(child: CircularProgressIndicator(color: _purple)),
+          error: (e, _) => Center(
+              child: Text('Error: $e',
+                  style: const TextStyle(color: Colors.white70))),
+          data: (library) {
+            if (!library.hasFolder) {
+              return _FolderPickerView(
+                  onPick: () =>
+                      ref.read(libraryProvider.notifier).pickFolder());
+            }
+            if (library.isScanning) {
+              return _ScanningView(library: library);
+            }
+            if (library.status == ScanStatus.error) {
+              return _ScanErrorView(
+                message: library.errorMessage ?? 'Unknown scan error',
+                onRetry: () => ref.read(libraryProvider.notifier).pickFolder(),
+              );
+            }
 
-          final player = playerAsync.valueOrNull ?? const KaraokePlayerState();
-          final queue = queueAsync.valueOrNull ?? [];
+            final player =
+                playerAsync.valueOrNull ?? const KaraokePlayerState();
+            final queue = queueAsync.valueOrNull ?? [];
 
-          return Row(
-            children: [
-              if (!_fullscreen) ...[
-                _Sidebar(
-                  library: library,
-                  searchCtrl: _search,
-                  sidebarWidth:
-                      _sidebarWidth ?? MediaQuery.sizeOf(context).width * 0.35,
-                  currentSongId: player.currentEntry?.songId,
-                  onQueue: (s) => _queueSong(s, player),
-                ),
-                // ── Sidebar drag resizer ──────────────────────────────
-                MouseRegion(
-                  cursor: SystemMouseCursors.resizeColumn,
-                  child: GestureDetector(
-                    onHorizontalDragUpdate: (d) {
-                      setState(() {
-                        _sidebarWidth = ((_sidebarWidth ??
-                                    MediaQuery.sizeOf(context).width * 0.35) +
-                                d.delta.dx)
-                            .clamp(
-                                200.0, MediaQuery.sizeOf(context).width * 0.65);
-                      });
-                    },
-                    child: Container(
-                      width: 6,
-                      color: _border,
+            return Row(
+              children: [
+                if (!_fullscreen) ...[
+                  _Sidebar(
+                    library: library,
+                    searchCtrl: _search,
+                    sidebarWidth: _sidebarWidth ??
+                        MediaQuery.sizeOf(context).width * 0.35,
+                    currentSongId: player.currentEntry?.songId,
+                    queuedSongIds: queue
+                        .where((e) =>
+                            e.status == QueueStatus.waiting ||
+                            e.status == QueueStatus.playing)
+                        .map((e) => e.songId)
+                        .toSet(),
+                    onQueue: (s) => _queueSong(s, player),
+                  ),
+                  // ── Sidebar drag resizer ──────────────────────────────
+                  MouseRegion(
+                    cursor: SystemMouseCursors.resizeColumn,
+                    child: GestureDetector(
+                      onHorizontalDragUpdate: (d) {
+                        setState(() {
+                          _sidebarWidth = ((_sidebarWidth ??
+                                      MediaQuery.sizeOf(context).width * 0.35) +
+                                  d.delta.dx)
+                              .clamp(200.0,
+                                  MediaQuery.sizeOf(context).width * 0.65);
+                        });
+                      },
+                      child: Container(
+                        width: 6,
+                        color: _border,
+                      ),
                     ),
+                  ),
+                ],
+                Expanded(
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: _VideoArea(
+                          player: player,
+                          queue: queue,
+                          fullscreen: _fullscreen,
+                          onToggle: () =>
+                              setState(() => _fullscreen = !_fullscreen),
+                        ),
+                      ),
+                      if (!_fullscreen) ...[
+                        // ── Queue panel drag resizer ────────────────────
+                        MouseRegion(
+                          cursor: SystemMouseCursors.resizeRow,
+                          child: GestureDetector(
+                            onVerticalDragUpdate: (d) {
+                              setState(() {
+                                _queueHeight = (_queueHeight - d.delta.dy)
+                                    .clamp(80.0, 500.0);
+                              });
+                            },
+                            child: Container(
+                              height: 6,
+                              color: _border,
+                            ),
+                          ),
+                        ),
+                        _QueuePanel(queue: queue, height: _queueHeight),
+                      ],
+                    ],
                   ),
                 ),
               ],
-              Expanded(
-                child: Column(
-                  children: [
-                    Expanded(
-                      child: _VideoArea(
-                        player: player,
-                        queue: queue,
-                        fullscreen: _fullscreen,
-                        onToggle: () =>
-                            setState(() => _fullscreen = !_fullscreen),
-                      ),
-                    ),
-                    if (!_fullscreen) ...[
-                      // ── Queue panel drag resizer ────────────────────
-                      MouseRegion(
-                        cursor: SystemMouseCursors.resizeRow,
-                        child: GestureDetector(
-                          onVerticalDragUpdate: (d) {
-                            setState(() {
-                              _queueHeight = (_queueHeight - d.delta.dy)
-                                  .clamp(80.0, 500.0);
-                            });
-                          },
-                          child: Container(
-                            height: 6,
-                            color: _border,
-                          ),
-                        ),
-                      ),
-                      _QueuePanel(queue: queue, height: _queueHeight),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
@@ -279,6 +313,51 @@ class _ScanningView extends StatelessWidget {
   }
 }
 
+// ── Scan error ────────────────────────────────────────────────────────────────
+
+class _ScanErrorView extends ConsumerWidget {
+  const _ScanErrorView({required this.message, required this.onRetry});
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 48),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.warning_amber_rounded,
+              color: Colors.redAccent, size: 52),
+          const Gap(20),
+          const Text('Scan Failed',
+              style: TextStyle(
+                  color: Colors.redAccent,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold)),
+          const Gap(12),
+          Text(message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: _sub, fontSize: 14)),
+          const Gap(32),
+          ElevatedButton.icon(
+            onPressed: onRetry,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _queueGreen,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            icon: const Icon(Icons.folder_open),
+            label: const Text('Choose Folder Again',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
 // ── Sidebar ──────────────────────────────────────────────────────────────────
 
 class _Sidebar extends ConsumerWidget {
@@ -287,6 +366,7 @@ class _Sidebar extends ConsumerWidget {
     required this.searchCtrl,
     required this.sidebarWidth,
     required this.currentSongId,
+    required this.queuedSongIds,
     required this.onQueue,
   });
 
@@ -294,6 +374,7 @@ class _Sidebar extends ConsumerWidget {
   final TextEditingController searchCtrl;
   final double sidebarWidth;
   final int? currentSongId;
+  final Set<int> queuedSongIds;
   final void Function(Song) onQueue;
 
   @override
@@ -363,11 +444,13 @@ class _Sidebar extends ConsumerWidget {
                     child: Text('No songs found',
                         style: TextStyle(color: Colors.white38)))
                 : ListView.builder(
-                    padding: const EdgeInsets.all(15),
+                    padding: const EdgeInsets.fromLTRB(15, 15, 15, 64),
                     itemCount: library.songs.length,
                     itemBuilder: (_, i) => _SongItem(
                       song: library.songs[i],
                       isCurrent: library.songs[i].id == currentSongId,
+                      isQueued: library.songs[i].id != null &&
+                          queuedSongIds.contains(library.songs[i].id),
                       onQueue: () => onQueue(library.songs[i]),
                     ),
                   ),
@@ -379,10 +462,15 @@ class _Sidebar extends ConsumerWidget {
 }
 
 class _SongItem extends StatefulWidget {
-  const _SongItem(
-      {required this.song, required this.isCurrent, required this.onQueue});
+  const _SongItem({
+    required this.song,
+    required this.isCurrent,
+    required this.isQueued,
+    required this.onQueue,
+  });
   final Song song;
   final bool isCurrent;
+  final bool isQueued;
   final VoidCallback onQueue;
 
   @override
@@ -439,11 +527,14 @@ class _SongItemState extends State<_SongItem> {
             ]),
           ),
           const Gap(12),
-          ElevatedButton(
-            onPressed: widget.onQueue,
+          ElevatedButton.icon(
+            onPressed: widget.isQueued ? null : widget.onQueue,
             style: ElevatedButton.styleFrom(
-              backgroundColor: _queueGreen,
-              foregroundColor: Colors.white,
+              backgroundColor:
+                  widget.isQueued ? const Color(0xFF374151) : _queueGreen,
+              foregroundColor: widget.isQueued ? Colors.white38 : Colors.white,
+              disabledBackgroundColor: const Color(0xFF374151),
+              disabledForegroundColor: Colors.white38,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10)),
@@ -451,7 +542,10 @@ class _SongItemState extends State<_SongItem> {
                   const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
               minimumSize: Size.zero,
             ),
-            child: const Text('QUEUE'),
+            icon: widget.isQueued
+                ? const Icon(Icons.check, size: 14)
+                : const Icon(Icons.add, size: 14),
+            label: Text(widget.isQueued ? 'QUEUED' : 'QUEUE'),
           ),
         ]),
       ),
@@ -461,7 +555,7 @@ class _SongItemState extends State<_SongItem> {
 
 // ── Video area ───────────────────────────────────────────────────────────────
 
-class _VideoArea extends ConsumerWidget {
+class _VideoArea extends ConsumerStatefulWidget {
   const _VideoArea({
     required this.player,
     required this.queue,
@@ -474,46 +568,154 @@ class _VideoArea extends ConsumerWidget {
   final VoidCallback onToggle;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_VideoArea> createState() => _VideoAreaState();
+}
+
+class _VideoAreaState extends ConsumerState<_VideoArea> {
+  bool _overlayVisible = true;
+  Timer? _hideTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // Start the hide timer immediately so the overlay fades out on first load
+    // even if the cursor never enters.
+    _startHideTimer();
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startHideTimer() {
+    _hideTimer?.cancel();
+    _hideTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _overlayVisible = false);
+    });
+  }
+
+  void _onCursorActivity() {
+    if (!_overlayVisible) setState(() => _overlayVisible = true);
+    _startHideTimer();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final notifier = ref.read(playerProvider.notifier);
-    return Container(
-      color: Colors.black,
-      child: Stack(children: [
-        // Video / placeholder
-        if (notifier.videoController != null && player.hasVideo)
-          Positioned.fill(
-              child: Video(
-                  controller: notifier.videoController!, fit: BoxFit.contain))
-        else
-          const Center(
-            child: Text('Karaoke Video Playing Here',
-                style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 22)),
-          ),
+    final controller = notifier.videoController;
+    final player = widget.player;
+    final queue = widget.queue;
 
-        // Fullscreen toggle (top-right)
-        Positioned(
-          top: 20,
-          right: 20,
-          child: GestureDetector(
-            onTap: onToggle,
-            child: Container(
-              width: 48,
-              height: 48,
-              decoration: const BoxDecoration(
-                  color: _overlayBg, shape: BoxShape.circle),
-              child: Icon(fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                  color: Colors.white, size: 24),
+    // Listener works at a lower level than MouseRegion and receives pointer
+    // events even when a platform view (Video) is present underneath.
+    return Listener(
+      onPointerHover: (_) => _onCursorActivity(),
+      onPointerDown: (_) => _onCursorActivity(),
+      child: MouseRegion(
+        cursor: _overlayVisible
+            ? SystemMouseCursors.basic
+            : SystemMouseCursors.none,
+        child: Container(
+          color: Colors.black,
+          child: Stack(children: [
+            // Video widget — PERMANENTLY in the tree.
+            if (controller != null)
+              Positioned.fill(
+                child: Video(
+                  controller: controller,
+                  fit: BoxFit.contain,
+                  controls: NoVideoControls,
+                ),
+              ),
+
+            // Idle placeholder
+            if (player.isIdle)
+              Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.queue_music_rounded,
+                        size: 64, color: Colors.white12),
+                    const Gap(20),
+                    const Text(
+                      'No song selected',
+                      style: TextStyle(
+                          color: Color(0xFF9CA3AF),
+                          fontSize: 22,
+                          fontWeight: FontWeight.w600),
+                    ),
+                    const Gap(8),
+                    const Text(
+                      'Pick a song from the list and tap QUEUE to start',
+                      style: TextStyle(color: Color(0xFF6B7280), fontSize: 14),
+                    ),
+                  ],
+                ),
+              ),
+
+            // Audio-only indicator
+            if (!player.isIdle && !player.hasVideo && !player.hasError)
+              const Center(
+                child: Text(
+                  '♫  Playing Audio',
+                  style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 22),
+                ),
+              ),
+
+            // Error display
+            if (player.hasError)
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Text(
+                    '⚠ ${player.errorMessage ?? "Playback error"}',
+                    style:
+                        const TextStyle(color: Colors.redAccent, fontSize: 15),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+
+            // Controls fade in/out on cursor idle
+            AnimatedOpacity(
+              opacity: _overlayVisible ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 400),
+              child: Stack(children: [
+                // Fullscreen toggle (top-right)
+                Positioned(
+                  top: 20,
+                  right: 20,
+                  child: GestureDetector(
+                    onTap: widget.onToggle,
+                    child: Container(
+                      width: 48,
+                      height: 48,
+                      decoration: const BoxDecoration(
+                          color: _overlayBg, shape: BoxShape.circle),
+                      child: Icon(
+                          widget.fullscreen
+                              ? Icons.fullscreen_exit
+                              : Icons.fullscreen,
+                          color: Colors.white,
+                          size: 24),
+                    ),
+                  ),
+                ),
+
+                // Full-width bottom bar
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  child: _NowPlayingOverlay(player: player, queue: queue),
+                ),
+              ]),
             ),
-          ),
+          ]),
         ),
-
-        // Now Playing overlay (bottom-left)
-        Positioned(
-          bottom: 20,
-          left: 20,
-          child: _NowPlayingOverlay(player: player, queue: queue),
-        ),
-      ]),
+      ),
     );
   }
 }
@@ -528,116 +730,165 @@ class _NowPlayingOverlay extends ConsumerWidget {
     if (player.isIdle && queue.isEmpty) return const SizedBox.shrink();
     final notifier = ref.read(playerProvider.notifier);
     final song = player.currentEntry?.song;
-    final waiting =
-        queue.where((e) => e.status == QueueStatus.waiting).take(2).toList();
+    final next =
+        queue.where((e) => e.status == QueueStatus.waiting).firstOrNull;
 
     return Container(
-      width: 320,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-          color: _overlayBg, borderRadius: BorderRadius.circular(14)),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Colors.transparent, Color(0xDD000000)],
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(24, 32, 24, 20),
       child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('NOW PLAYING',
-                style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white)),
-            const Gap(8),
-            if (song != null) ...[
-              Text(song.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500)),
-              if (song.artist != null || song.folderName != null)
-                Text(song.artist ?? song.folderName ?? '',
-                    style: const TextStyle(color: _sub, fontSize: 13)),
-              const Gap(10),
-              _MiniControls(player: player, notifier: notifier),
-            ] else
-              const Text('—', style: TextStyle(color: _sub, fontSize: 14)),
-            if (waiting.isNotEmpty) ...[
-              const Gap(12),
-              const Text('UP NEXT',
-                  style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white)),
-              const Gap(6),
-              ...waiting.map((e) => Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Text(e.song?.title ?? 'Song #${e.songId}',
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Now Playing | Controls | Up Next (single row) ─────────
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // NOW PLAYING (left)
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('NOW PLAYING',
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: _purple,
+                            letterSpacing: 1.5)),
+                    const Gap(4),
+                    Text(
+                      song?.title ?? '—',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold),
+                    ),
+                    if ((song?.artist ?? song?.folderName) != null)
+                      Text(
+                        song!.artist ?? song.folderName!,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _sub, fontSize: 13)),
-                  )),
+                        style: const TextStyle(color: _sub, fontSize: 13),
+                      ),
+                  ],
+                ),
+              ),
+              // Controls (center)
+              if (song != null) ...[
+                const Gap(24),
+                GestureDetector(
+                  onTap: notifier.togglePlayPause,
+                  child: Container(
+                    width: 48,
+                    height: 48,
+                    decoration: const BoxDecoration(
+                        color: _purple, shape: BoxShape.circle),
+                    child: Icon(
+                        player.isPlaying ? Icons.pause : Icons.play_arrow,
+                        color: Colors.black,
+                        size: 26),
+                  ),
+                ),
+                const Gap(16),
+                GestureDetector(
+                  onTap: notifier.skip,
+                  child: const Icon(Icons.skip_next,
+                      color: Colors.white70, size: 32),
+                ),
+                const Gap(24),
+              ],
+              // UP NEXT (right)
+              Expanded(
+                child: next != null
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text('UP NEXT',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white38,
+                                  letterSpacing: 1.5)),
+                          const Gap(4),
+                          Text(
+                            next.song?.title ?? 'Song #${next.songId}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold),
+                          ),
+                          if (next.song?.artist != null ||
+                              next.song?.folderName != null)
+                            Text(
+                              next.song!.artist ?? next.song!.folderName!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: _sub, fontSize: 13),
+                            ),
+                        ],
+                      )
+                    : const SizedBox.shrink(),
+              ),
             ],
-          ]),
+          ),
+
+          // ── Seek bar ──────────────────────────────────────────────
+          if (song != null) ...[
+            const Gap(12),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 3,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+                activeTrackColor: _purple,
+                inactiveTrackColor: Colors.white24,
+                thumbColor: _purple,
+              ),
+              child: Slider(
+                value: player.progressFraction,
+                onChanged: (v) {
+                  if (player.duration > Duration.zero) {
+                    notifier.seek(player.duration * v);
+                  }
+                },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(_fmt(player.position),
+                      style:
+                          const TextStyle(color: Colors.white54, fontSize: 11)),
+                  Text(_fmt(player.duration),
+                      style:
+                          const TextStyle(color: Colors.white54, fontSize: 11)),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
-}
-
-class _MiniControls extends StatelessWidget {
-  const _MiniControls({required this.player, required this.notifier});
-  final KaraokePlayerState player;
-  final PlayerNotifier notifier;
 
   String _fmt(Duration d) {
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(mainAxisSize: MainAxisSize.min, children: [
-      SliderTheme(
-        data: SliderTheme.of(context).copyWith(
-          trackHeight: 3,
-          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-          overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
-          activeTrackColor: _purple,
-          inactiveTrackColor: Colors.white24,
-          thumbColor: _purple,
-        ),
-        child: Slider(
-          value: player.progressFraction,
-          onChanged: (v) {
-            if (player.duration > Duration.zero)
-              notifier.seek(player.duration * v);
-          },
-        ),
-      ),
-      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Text(_fmt(player.position),
-            style: const TextStyle(color: Colors.white54, fontSize: 11)),
-        Row(children: [
-          GestureDetector(
-            onTap: notifier.togglePlayPause,
-            child: Container(
-              width: 36,
-              height: 36,
-              decoration:
-                  const BoxDecoration(color: _purple, shape: BoxShape.circle),
-              child: Icon(player.isPlaying ? Icons.pause : Icons.play_arrow,
-                  color: Colors.black, size: 20),
-            ),
-          ),
-          const Gap(8),
-          GestureDetector(
-            onTap: notifier.skip,
-            child: const Icon(Icons.skip_next, color: Colors.white70, size: 24),
-          ),
-        ]),
-        Text(_fmt(player.duration),
-            style: const TextStyle(color: Colors.white54, fontSize: 11)),
-      ]),
-    ]);
   }
 }
 
