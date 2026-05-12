@@ -1,7 +1,10 @@
 // lib/main.dart
+import 'dart:io';
 import 'dart:ui' show AppExitResponse;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 
@@ -12,6 +15,14 @@ import 'package:karaoke_chan/features/queue/data/queue_repository.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Force landscape on Android
+  if (!kIsWeb && Platform.isAndroid) {
+    await SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+  }
 
   // Initialize media_kit
   MediaKit.ensureInitialized();

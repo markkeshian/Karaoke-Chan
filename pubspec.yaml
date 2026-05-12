@@ -30,6 +30,9 @@ dependencies:
   # File picking
   file_picker: ^8.0.3
 
+  # Runtime permissions (Android)
+  permission_handler: ^11.3.1
+
   # Persistence
   shared_preferences: ^2.3.3
 

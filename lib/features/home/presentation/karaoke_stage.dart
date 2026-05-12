@@ -55,6 +55,7 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
   final _search = TextEditingController();
   final _focusNode = FocusNode();
   bool _fullscreen = false;
+  bool _isChangingFolder = false;
   double? _sidebarWidth;
   double _queueHeight = 220;
 
@@ -86,6 +87,7 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
       autofocus: true,
       onKeyEvent: _handleKey,
       child: Scaffold(
+        resizeToAvoidBottomInset: false,
         backgroundColor: _bg,
         body: libraryAsync.when(
           loading: () =>
@@ -94,10 +96,16 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
               child: Text('Error: $e',
                   style: const TextStyle(color: Colors.white70))),
           data: (library) {
-            if (!library.hasFolder) {
+            if (!library.hasFolder || _isChangingFolder) {
               return _FolderPickerView(
-                  onPick: () =>
-                      ref.read(libraryProvider.notifier).pickFolder());
+                onPick: () async {
+                  await ref.read(libraryProvider.notifier).pickFolder();
+                  if (mounted) setState(() => _isChangingFolder = false);
+                },
+                onCancel: library.hasFolder
+                    ? () => setState(() => _isChangingFolder = false)
+                    : null,
+              );
             }
             if (library.isScanning) {
               return _ScanningView(library: library);
@@ -129,6 +137,8 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
                         .map((e) => e.songId)
                         .toSet(),
                     onQueue: (s) => _queueSong(s, player),
+                    onChangeFolder: () =>
+                        setState(() => _isChangingFolder = true),
                   ),
                   // ── Sidebar drag resizer ──────────────────────────────
                   MouseRegion(
@@ -168,14 +178,34 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
                           cursor: SystemMouseCursors.resizeRow,
                           child: GestureDetector(
                             onVerticalDragUpdate: (d) {
+                              final maxQueue =
+                                  MediaQuery.sizeOf(context).height * 0.40;
                               setState(() {
                                 _queueHeight = (_queueHeight - d.delta.dy)
-                                    .clamp(80.0, 500.0);
+                                    .clamp(130.0, maxQueue);
                               });
                             },
                             child: Container(
-                              height: 6,
+                              height: 28,
                               color: _border,
+                              child: const Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    SizedBox(
+                                      width: 40,
+                                      height: 4,
+                                      child: DecoratedBox(
+                                        decoration: BoxDecoration(
+                                          color: Colors.white30,
+                                          borderRadius: BorderRadius.all(
+                                              Radius.circular(2)),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -210,61 +240,87 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
 // ── Folder picker ────────────────────────────────────────────────────────────
 
 class _FolderPickerView extends StatelessWidget {
-  const _FolderPickerView({required this.onPick});
+  const _FolderPickerView({required this.onPick, this.onCancel});
   final VoidCallback onPick;
+  final VoidCallback? onCancel;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       color: const Color(0xFF0F172A),
-      alignment: Alignment.center,
-      child: Container(
-        width: 420,
-        padding: const EdgeInsets.all(40),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1E293B),
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: const [
-            BoxShadow(
-                color: Colors.black54, blurRadius: 30, offset: Offset(0, 10)),
-          ],
-        ),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text('🎤', style: TextStyle(fontSize: 64)),
-          const Gap(16),
-          const Text('Karaoke Queue',
-              style: TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white)),
-          const Gap(12),
-          const Text(
-            'Please select a folder to browse your songs.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: _sub, fontSize: 15, height: 1.5),
-          ),
-          const Gap(32),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: onPick,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _queueGreen,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                textStyle:
-                    const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
+      child: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Container(
+                padding: const EdgeInsets.all(40),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: const [
+                    BoxShadow(
+                        color: Colors.black54,
+                        blurRadius: 30,
+                        offset: Offset(0, 10)),
+                  ],
+                ),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Text('🎤', style: TextStyle(fontSize: 64)),
+                  const Gap(16),
+                  const Text('Karaoke Queue',
+                      style: TextStyle(
+                          fontSize: 32,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white)),
+                  const Gap(12),
+                  const Text(
+                    'Please select a folder to browse your songs.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: _sub, fontSize: 15, height: 1.5),
+                  ),
+                  const Gap(32),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: onPick,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _queueGreen,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        textStyle: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.bold),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14)),
+                      ),
+                      icon: const Icon(Icons.folder_open),
+                      label: const Text('📁  Select Karaoke Folder'),
+                    ),
+                  ),
+                  if (onCancel != null) ...[
+                    const Gap(12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: TextButton(
+                        onPressed: onCancel,
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.white54,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: const Text('Cancel',
+                            style: TextStyle(fontSize: 15)),
+                      ),
+                    ),
+                  ],
+                  const Gap(16),
+                  const Text('Supports MP4 · MKV · AVI · MP3 · FLAC · and more',
+                      style: TextStyle(color: Colors.white30, fontSize: 12)),
+                ]),
               ),
-              icon: const Icon(Icons.folder_open),
-              label: const Text('📁  Select Karaoke Folder'),
             ),
           ),
-          const Gap(16),
-          const Text('Supports MP4 · MKV · AVI · MP3 · FLAC · and more',
-              style: TextStyle(color: Colors.white30, fontSize: 12)),
-        ]),
+        ),
       ),
     );
   }
@@ -368,6 +424,7 @@ class _Sidebar extends ConsumerWidget {
     required this.currentSongId,
     required this.queuedSongIds,
     required this.onQueue,
+    required this.onChangeFolder,
   });
 
   final LibraryState library;
@@ -376,6 +433,7 @@ class _Sidebar extends ConsumerWidget {
   final int? currentSongId;
   final Set<int> queuedSongIds;
   final void Function(Song) onQueue;
+  final VoidCallback onChangeFolder;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -386,76 +444,97 @@ class _Sidebar extends ConsumerWidget {
           color: _sidebarBg,
           border: Border(right: BorderSide(color: _border, width: 2)),
         ),
-        child: Column(children: [
-          // ── Top bar ────────────────────────────────────────────────────
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 20, 12, 20),
-            decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: _border, width: 2))),
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                const Expanded(
-                  child: Text('🎤  Karaoke Queue',
-                      style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white)),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.settings_outlined,
-                      color: Colors.white38, size: 18),
-                  tooltip: 'Settings',
-                  onPressed: () => context.push(AppRoutes.settings),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.folder_open_outlined,
-                      color: Colors.white38, size: 18),
-                  tooltip: 'Change folder',
-                  onPressed: () =>
-                      ref.read(libraryProvider.notifier).changeFolder(),
-                ),
-              ]),
-              const Gap(12),
-              TextField(
-                controller: searchCtrl,
-                style: const TextStyle(color: Colors.white, fontSize: 15),
-                decoration: InputDecoration(
-                  hintText: 'Search songs...',
-                  hintStyle: const TextStyle(color: Colors.white38),
-                  prefixIcon: const Icon(Icons.search, color: Colors.white38),
-                  filled: true,
-                  fillColor: _cardBg,
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none),
-                ),
-                onChanged: (q) => ref.read(libraryProvider.notifier).search(q),
-              ),
-            ]),
-          ),
-
-          // ── Song list ──────────────────────────────────────────────────
-          Expanded(
-            child: library.songs.isEmpty
-                ? const Center(
-                    child: Text('No songs found',
-                        style: TextStyle(color: Colors.white38)))
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(15, 15, 15, 64),
-                    itemCount: library.songs.length,
-                    itemBuilder: (_, i) => _SongItem(
-                      song: library.songs[i],
-                      isCurrent: library.songs[i].id == currentSongId,
-                      isQueued: library.songs[i].id != null &&
-                          queuedSongIds.contains(library.songs[i].id),
-                      onQueue: () => onQueue(library.songs[i]),
+        child: SafeArea(
+          right: false,
+          child: Column(children: [
+            // ── Top bar ────────────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 20, 12, 20),
+              decoration: const BoxDecoration(
+                  border: Border(bottom: BorderSide(color: _border, width: 2))),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      const Expanded(
+                        child: Text('🎤  Karaoke Queue',
+                            style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white)),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.settings_outlined,
+                            color: Colors.white38, size: 18),
+                        tooltip: 'Settings',
+                        onPressed: () => context.push(AppRoutes.settings),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.folder_open_outlined,
+                            color: Colors.white38, size: 18),
+                        tooltip: 'Change folder',
+                        onPressed: onChangeFolder,
+                      ),
+                    ]),
+                    const Gap(12),
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: searchCtrl,
+                      builder: (context, value, _) => TextField(
+                        controller: searchCtrl,
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 15),
+                        decoration: InputDecoration(
+                          hintText: 'Search songs...',
+                          hintStyle: const TextStyle(color: Colors.white38),
+                          prefixIcon:
+                              const Icon(Icons.search, color: Colors.white38),
+                          suffixIcon: value.text.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.clear,
+                                      color: Colors.white38, size: 18),
+                                  onPressed: () {
+                                    searchCtrl.clear();
+                                    ref
+                                        .read(libraryProvider.notifier)
+                                        .search('');
+                                  },
+                                )
+                              : null,
+                          filled: true,
+                          fillColor: _cardBg,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 14),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide.none),
+                        ),
+                        onChanged: (q) =>
+                            ref.read(libraryProvider.notifier).search(q),
+                      ),
                     ),
-                  ),
-          ),
-        ]),
+                  ]),
+            ),
+
+            // ── Song list ──────────────────────────────────────────────────
+            Expanded(
+              child: library.songs.isEmpty
+                  ? const Center(
+                      child: Text('No songs found',
+                          style: TextStyle(color: Colors.white38)))
+                  : ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(15, 15, 15, 64),
+                      itemCount: library.songs.length,
+                      itemBuilder: (_, i) => _SongItem(
+                        song: library.songs[i],
+                        isCurrent: library.songs[i].id == currentSongId,
+                        isQueued: library.songs[i].id != null &&
+                            queuedSongIds.contains(library.songs[i].id),
+                        onQueue: () => onQueue(library.songs[i]),
+                      ),
+                    ),
+            ),
+          ]),
+        ),
       ),
     );
   }
@@ -632,26 +711,30 @@ class _VideoAreaState extends ConsumerState<_VideoArea> {
 
             // Idle placeholder
             if (player.isIdle)
-              Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.queue_music_rounded,
-                        size: 64, color: Colors.white12),
-                    const Gap(20),
-                    const Text(
-                      'No song selected',
-                      style: TextStyle(
-                          color: Color(0xFF9CA3AF),
-                          fontSize: 22,
-                          fontWeight: FontWeight.w600),
-                    ),
-                    const Gap(8),
-                    const Text(
-                      'Pick a song from the list and tap QUEUE to start',
-                      style: TextStyle(color: Color(0xFF6B7280), fontSize: 14),
-                    ),
-                  ],
+              const Center(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.queue_music_rounded,
+                          size: 64, color: Colors.white12),
+                      Gap(20),
+                      Text(
+                        'No song selected',
+                        style: TextStyle(
+                            color: Color(0xFF9CA3AF),
+                            fontSize: 22,
+                            fontWeight: FontWeight.w600),
+                      ),
+                      Gap(8),
+                      Text(
+                        'Pick a song from the list and tap QUEUE to start',
+                        style:
+                            TextStyle(color: Color(0xFF6B7280), fontSize: 14),
+                      ),
+                    ],
+                  ),
                 ),
               ),
 
@@ -741,7 +824,8 @@ class _NowPlayingOverlay extends ConsumerWidget {
           colors: [Colors.transparent, Color(0xDD000000)],
         ),
       ),
-      padding: const EdgeInsets.fromLTRB(24, 32, 24, 20),
+      padding: EdgeInsets.fromLTRB(
+          24, 32, 24, MediaQuery.paddingOf(context).bottom + 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -903,37 +987,45 @@ class _QueuePanel extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final waiting =
         queue.where((e) => e.status == QueueStatus.waiting).toList();
-    return Container(
-      height: height,
-      decoration: const BoxDecoration(
-        color: _sidebarBg,
-        border: Border(top: BorderSide(color: _border, width: 2)),
-      ),
-      padding: const EdgeInsets.all(20),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Queue List',
-            style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: Colors.white)),
-        const Gap(12),
-        Expanded(
-          child: waiting.isEmpty
-              ? const Center(
-                  child: Text('Queue is empty',
-                      style: TextStyle(color: Colors.white38)))
-              : ListView.builder(
-                  itemCount: waiting.length,
-                  itemBuilder: (_, i) => _QueueItem(
-                    entry: waiting[i],
-                    position: i + 1,
-                    onRemove: () => ref
-                        .read(queueNotifierProvider.notifier)
-                        .remove(waiting[i].id!),
-                  ),
-                ),
+    return SafeArea(
+      top: false,
+      left: false,
+      right: false,
+      child: Container(
+        height: height,
+        decoration: const BoxDecoration(
+          color: _sidebarBg,
+          border: Border(top: BorderSide(color: _border, width: 2)),
         ),
-      ]),
+        padding: const EdgeInsets.all(20),
+        child: ClipRect(
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Queue List',
+                style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white)),
+            const Gap(12),
+            Expanded(
+              child: waiting.isEmpty
+                  ? const Center(
+                      child: Text('Queue is empty',
+                          style: TextStyle(color: Colors.white38)))
+                  : ListView.builder(
+                      itemCount: waiting.length,
+                      itemBuilder: (_, i) => _QueueItem(
+                        entry: waiting[i],
+                        position: i + 1,
+                        onRemove: () => ref
+                            .read(queueNotifierProvider.notifier)
+                            .remove(waiting[i].id!),
+                      ),
+                    ),
+            ),
+          ]),
+        ),
+      ),
     );
   }
 }
