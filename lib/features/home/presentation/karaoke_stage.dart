@@ -50,6 +50,7 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
   double? _sidebarWidth;
   double _queueHeight = 220;
   SearchMode _searchMode = SearchMode.local;
+  bool _karaokeMode = true;
   Timer? _ytDebounce;
 
   @override
@@ -168,6 +169,21 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
                   onChangeFolder: () =>
                       setState(() => _isChangingFolder = true),
                   searchMode: _searchMode,
+                  karaokeMode: _karaokeMode,
+                  onKaraokeModeChanged: (val) {
+                    setState(() {
+                      _karaokeMode = val;
+                      // Re-run the current YouTube query with the updated suffix.
+                      final q = _search.text;
+                      if (_searchMode == SearchMode.online && q.isNotEmpty) {
+                        _ytDebounce?.cancel();
+                        final effectiveQ = val ? '$q karaoke' : q;
+                        ref
+                            .read(youtubeSearchProvider.notifier)
+                            .search(effectiveQ);
+                      }
+                    });
+                  },
                   onSearchModeChanged: (mode) {
                     setState(() {
                       _searchMode = mode;
@@ -180,7 +196,10 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
                       } else {
                         ref.read(libraryProvider.notifier).search('');
                         if (q.isNotEmpty) {
-                          ref.read(youtubeSearchProvider.notifier).search(q);
+                          final effectiveQ = _karaokeMode ? '$q karaoke' : q;
+                          ref
+                              .read(youtubeSearchProvider.notifier)
+                              .search(effectiveQ);
                         } else {
                           ref.read(youtubeSearchProvider.notifier).clear();
                         }
@@ -190,7 +209,10 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
                   onYoutubeSearch: (q) {
                     _ytDebounce?.cancel();
                     _ytDebounce = Timer(const Duration(milliseconds: 600), () {
-                      ref.read(youtubeSearchProvider.notifier).search(q);
+                      final effectiveQ = _karaokeMode ? '$q karaoke' : q;
+                      ref
+                          .read(youtubeSearchProvider.notifier)
+                          .search(effectiveQ);
                     });
                   },
                   onYoutubePlay: (video) => _queueYoutube(video, player),
@@ -756,6 +778,8 @@ class _Sidebar extends ConsumerWidget {
     required this.onQueue,
     required this.onChangeFolder,
     required this.searchMode,
+    required this.karaokeMode,
+    required this.onKaraokeModeChanged,
     required this.onSearchModeChanged,
     required this.onYoutubeSearch,
     required this.onYoutubePlay,
@@ -772,6 +796,8 @@ class _Sidebar extends ConsumerWidget {
   final void Function(Song) onQueue;
   final VoidCallback onChangeFolder;
   final SearchMode searchMode;
+  final bool karaokeMode;
+  final void Function(bool) onKaraokeModeChanged;
   final void Function(SearchMode) onSearchModeChanged;
   final void Function(String query) onYoutubeSearch;
   final void Function(YoutubeVideoResult video) onYoutubePlay;
@@ -845,18 +871,60 @@ class _Sidebar extends ConsumerWidget {
                             hintStyle: const TextStyle(color: Colors.white38),
                             prefixIcon:
                                 const Icon(Icons.search, color: Colors.white38),
-                            suffixIcon: value.text.isNotEmpty
-                                ? IconButton(
-                                    icon: const Icon(Icons.clear,
-                                        color: Colors.white38, size: 18),
-                                    onPressed: () {
-                                      searchCtrl.clear();
-                                      ref
-                                          .read(libraryProvider.notifier)
-                                          .search('');
-                                    },
+                            suffixIcon: searchMode == SearchMode.online
+                                ? Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (value.text.isNotEmpty)
+                                        IconButton(
+                                          icon: const Icon(Icons.clear,
+                                              color: Colors.white38, size: 18),
+                                          onPressed: () {
+                                            searchCtrl.clear();
+                                            ref
+                                                .read(libraryProvider.notifier)
+                                                .search('');
+                                          },
+                                        ),
+                                      Tooltip(
+                                        message: karaokeMode
+                                            ? 'Karaoke mode ON — tap to disable'
+                                            : 'Karaoke mode OFF — tap to enable',
+                                        child: GestureDetector(
+                                          onTap: () => onKaraokeModeChanged(
+                                              !karaokeMode),
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 10),
+                                            child: AnimatedSwitcher(
+                                              duration: const Duration(
+                                                  milliseconds: 200),
+                                              child: Icon(
+                                                Icons.mic,
+                                                key: ValueKey(karaokeMode),
+                                                size: 20,
+                                                color: karaokeMode
+                                                    ? const Color(0xFFE040FB)
+                                                    : Colors.white24,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   )
-                                : null,
+                                : value.text.isNotEmpty
+                                    ? IconButton(
+                                        icon: const Icon(Icons.clear,
+                                            color: Colors.white38, size: 18),
+                                        onPressed: () {
+                                          searchCtrl.clear();
+                                          ref
+                                              .read(libraryProvider.notifier)
+                                              .search('');
+                                        },
+                                      )
+                                    : null,
                             filled: true,
                             fillColor: _cardBg,
                             contentPadding: const EdgeInsets.symmetric(
