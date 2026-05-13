@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.karaokechan" "\0"
-            VALUE "FileDescription", "karaoke_chan" "\0"
+            VALUE "FileDescription", "Karaoke-Chan" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "karaoke_chan" "\0"
+            VALUE "InternalName", "Karaoke-Chan" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.karaokechan. All rights reserved." "\0"
             VALUE "OriginalFilename", "karaoke_chan.exe" "\0"
-            VALUE "ProductName", "karaoke_chan" "\0"
+            VALUE "ProductName", "Karaoke-Chan" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
