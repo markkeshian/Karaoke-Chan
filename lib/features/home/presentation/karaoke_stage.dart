@@ -267,9 +267,10 @@ class _FolderPickerView extends StatelessWidget {
                   ],
                 ),
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  const Text('🎤', style: TextStyle(fontSize: 64)),
+                  Image.asset('assets/icons/logo-removebg-preview.png',
+                      height: 80, width: 80),
                   const Gap(16),
-                  const Text('Karaoke Queue',
+                  const Text('Karaoke-Chan',
                       style: TextStyle(
                           fontSize: 32,
                           fontWeight: FontWeight.bold,
@@ -456,8 +457,14 @@ class _Sidebar extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(children: [
+                      Image.asset(
+                        'assets/icons/logo-removebg-preview.png',
+                        height: 28,
+                        width: 28,
+                      ),
+                      const SizedBox(width: 8),
                       const Expanded(
-                        child: Text('🎤  Karaoke Queue',
+                        child: Text('Karaoke Queue',
                             style: TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.bold,
