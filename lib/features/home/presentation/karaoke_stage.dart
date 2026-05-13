@@ -22,6 +22,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gap/gap.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:karaoke_chan/core/services/youtube_service.dart';
 import 'package:karaoke_chan/features/library/data/library_notifier.dart';
 import 'package:karaoke_chan/features/library/data/song_model.dart';
@@ -393,13 +394,56 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
 
 // ── Folder picker ────────────────────────────────────────────────────────────
 
-class _FolderPickerView extends StatelessWidget {
+class _FolderPickerView extends StatefulWidget {
   const _FolderPickerView({required this.onPick, this.onCancel});
   final VoidCallback onPick;
   final VoidCallback? onCancel;
 
   @override
+  State<_FolderPickerView> createState() => _FolderPickerViewState();
+}
+
+class _FolderPickerViewState extends State<_FolderPickerView>
+    with WidgetsBindingObserver {
+  // null = not yet checked
+  bool? _permPermanentlyDenied;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _checkPermission();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // Re-check when app comes back from Settings
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _checkPermission();
+  }
+
+  Future<void> _checkPermission() async {
+    if (!Platform.isAndroid) {
+      if (mounted) setState(() => _permPermanentlyDenied = false);
+      return;
+    }
+    final v = await Permission.videos.status;
+    final a = await Permission.audio.status;
+    final s = await Permission.storage.status;
+    final denied = (v.isPermanentlyDenied || a.isPermanentlyDenied) &&
+        s.isPermanentlyDenied;
+    if (mounted) setState(() => _permPermanentlyDenied = denied);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final permDenied = _permPermanentlyDenied ?? false;
+
     return Container(
       color: const Color(0xFF0F172A),
       child: SafeArea(
@@ -430,36 +474,138 @@ class _FolderPickerView extends StatelessWidget {
                             fontSize: 32,
                             fontWeight: FontWeight.bold,
                             color: Colors.white)),
-                    const Gap(12),
-                    const Text(
-                      'Please select a folder to browse your songs.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: _sub, fontSize: 15, height: 1.5),
-                    ),
-                    const Gap(32),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: onPick,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _queueGreen,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          textStyle: const TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.bold),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14)),
+                    const Gap(16),
+                    if (permDenied) ...[
+                      // ── Permission permanently denied ─────────────────
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withAlpha(30),
+                          borderRadius: BorderRadius.circular(12),
+                          border:
+                              Border.all(color: Colors.redAccent.withAlpha(80)),
                         ),
-                        icon: const Icon(Icons.folder_open),
-                        label: const Text('📁  Select Karaoke Folder'),
+                        child: const Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.lock_outline,
+                                color: Colors.redAccent, size: 22),
+                            Gap(10),
+                            Expanded(
+                              child: Text(
+                                'Storage permission was denied.\nKaraoke-Chan needs access to your files to find songs.',
+                                style: TextStyle(
+                                    color: Colors.redAccent,
+                                    fontSize: 14,
+                                    height: 1.5),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    if (onCancel != null) ...[
+                      const Gap(12),
+                      const Text(
+                        'Please open App Settings → Permissions → Files and Media → Allow.',
+                        textAlign: TextAlign.center,
+                        style:
+                            TextStyle(color: _sub, fontSize: 13, height: 1.6),
+                      ),
+                      const Gap(28),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: () async {
+                            await openAppSettings();
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.redAccent,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            textStyle: const TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.bold),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
+                          ),
+                          icon: const Icon(Icons.settings_outlined),
+                          label: const Text('Open App Settings'),
+                        ),
+                      ),
+                      const Gap(12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: widget.onPick,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _sub,
+                            side: const BorderSide(color: _border),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
+                          ),
+                          icon: const Icon(Icons.folder_open, size: 18),
+                          label: const Text('Try Again'),
+                        ),
+                      ),
+                    ] else ...[
+                      // ── Normal first-time or change folder ────────────
+                      const Text(
+                        'Select the folder where your karaoke songs are stored.',
+                        textAlign: TextAlign.center,
+                        style:
+                            TextStyle(color: _sub, fontSize: 15, height: 1.5),
+                      ),
+                      if (Platform.isAndroid) ...[
+                        const Gap(12),
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withAlpha(8),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.info_outline,
+                                  color: Colors.white38, size: 18),
+                              Gap(8),
+                              Expanded(
+                                child: Text(
+                                  'Android will ask for storage permission. Tap "Allow" to let the app read your files.',
+                                  style: TextStyle(
+                                      color: Colors.white38,
+                                      fontSize: 12,
+                                      height: 1.5),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                      const Gap(28),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: widget.onPick,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _queueGreen,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            textStyle: const TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.bold),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14)),
+                          ),
+                          icon: const Icon(Icons.folder_open),
+                          label: const Text('📁  Select Karaoke Folder'),
+                        ),
+                      ),
+                    ],
+                    if (widget.onCancel != null) ...[
                       const Gap(12),
                       SizedBox(
                         width: double.infinity,
                         child: TextButton(
-                          onPressed: onCancel,
+                          onPressed: widget.onCancel,
                           style: TextButton.styleFrom(
                             foregroundColor: Colors.white54,
                             padding: const EdgeInsets.symmetric(vertical: 14),
@@ -473,14 +619,14 @@ class _FolderPickerView extends StatelessWidget {
                     const Text(
                         'Supports MP4 · MKV · AVI · MP3 · FLAC · and more',
                         style: TextStyle(color: Colors.white30, fontSize: 12)),
-                  ]), // Column
-                ), // inner Container
-              ), // ConstrainedBox
-            ), // inner Center
-          ), // SingleChildScrollView
-        ), // outer Center
-      ), // SafeArea
-    ); // outer Container
+                  ]),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -534,25 +680,65 @@ class _ScanErrorView extends ConsumerWidget {
   final String message;
   final VoidCallback onRetry;
 
+  bool get _isPermissionError =>
+      message.toLowerCase().contains('permission') ||
+      message.toLowerCase().contains('denied') ||
+      message.toLowerCase().contains('no files found');
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final isPerm = _isPermissionError;
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 48),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.warning_amber_rounded,
-              color: Colors.redAccent, size: 52),
+          Icon(
+            isPerm ? Icons.folder_off_outlined : Icons.warning_amber_rounded,
+            color: isPerm ? Colors.orangeAccent : Colors.redAccent,
+            size: 52,
+          ),
           const Gap(20),
-          const Text('Scan Failed',
-              style: TextStyle(
-                  color: Colors.redAccent,
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold)),
+          Text(
+            isPerm ? 'No Access to Folder' : 'Scan Failed',
+            style: TextStyle(
+                color: isPerm ? Colors.orangeAccent : Colors.redAccent,
+                fontSize: 22,
+                fontWeight: FontWeight.bold),
+          ),
           const Gap(12),
-          Text(message,
+          Text(
+            isPerm
+                ? 'Karaoke-Chan couldn\'t read the selected folder.\nThis usually means storage permission was denied or the folder is empty.'
+                : message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: _sub, fontSize: 14, height: 1.6),
+          ),
+          if (isPerm) ...[
+            const Gap(8),
+            const Text(
+              'Go to App Settings → Permissions → Files and Media → Allow.',
               textAlign: TextAlign.center,
-              style: const TextStyle(color: _sub, fontSize: 14)),
+              style:
+                  TextStyle(color: Colors.white38, fontSize: 12, height: 1.6),
+            ),
+          ],
           const Gap(32),
+          if (isPerm)
+            ElevatedButton.icon(
+              onPressed: () => openAppSettings(),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orangeAccent,
+                foregroundColor: Colors.black,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+              icon: const Icon(Icons.settings_outlined),
+              label: const Text('Open App Settings',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          const Gap(12),
           ElevatedButton.icon(
             onPressed: onRetry,
             style: ElevatedButton.styleFrom(
