@@ -1,7 +1,28 @@
 // lib/features/player/data/player_state.dart
+import 'package:karaoke_chan/core/services/youtube_service.dart';
 import 'package:karaoke_chan/features/queue/data/queue_entry_model.dart';
 
 enum PlayerStatus { idle, loading, playing, paused, error }
+
+/// A single item in the unified pending queue.
+/// Carries display info + enough data for the player to start playback.
+class UnifiedQueueItem {
+  const UnifiedQueueItem({
+    required this.title,
+    required this.isYoutube,
+    this.dbEntryId,
+    this.youtubeVideo,
+  });
+
+  final String title;
+  final bool isYoutube;
+
+  /// Non-null for local songs — the DB queue entry ID used for removal.
+  final int? dbEntryId;
+
+  /// Non-null for YouTube songs — the full result object used for playback.
+  final YoutubeVideoResult? youtubeVideo;
+}
 
 class KaraokePlayerState {
   const KaraokePlayerState({
@@ -12,7 +33,8 @@ class KaraokePlayerState {
     this.volume = 1.0,
     this.errorMessage,
     this.hasVideo = false,
-  });
+    List<UnifiedQueueItem>? unifiedQueue,
+  }) : _unifiedQueue = unifiedQueue;
 
   final QueueEntry? currentEntry;
   final PlayerStatus status;
@@ -20,13 +42,19 @@ class KaraokePlayerState {
   final Duration duration;
   final double volume;
   final String? errorMessage;
-
-  /// True when media_kit reports at least one real video track for the current media.
   final bool hasVideo;
+
+  // Nullable backing field — hot-reload safe.
+  final List<UnifiedQueueItem>? _unifiedQueue;
+
+  /// Pending queue items in insertion order (local + YouTube interleaved).
+  List<UnifiedQueueItem> get unifiedQueue =>
+      _unifiedQueue ?? const <UnifiedQueueItem>[];
 
   bool get isPlaying => status == PlayerStatus.playing;
   bool get isPaused => status == PlayerStatus.paused;
   bool get isIdle => status == PlayerStatus.idle;
+  bool get isLoading => status == PlayerStatus.loading;
   bool get hasError => status == PlayerStatus.error;
 
   double get progressFraction {
@@ -42,6 +70,7 @@ class KaraokePlayerState {
     double? volume,
     String? errorMessage,
     bool? hasVideo,
+    List<UnifiedQueueItem>? unifiedQueue,
     bool clearEntry = false,
     bool clearError = false,
   }) {
@@ -53,6 +82,7 @@ class KaraokePlayerState {
       volume: volume ?? this.volume,
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       hasVideo: hasVideo ?? this.hasVideo,
+      unifiedQueue: unifiedQueue ?? this.unifiedQueue,
     );
   }
 }

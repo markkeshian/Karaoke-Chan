@@ -46,9 +46,10 @@ class ScannedSong {
 
 class FolderScanner {
   static const _supportedExtensions = {
-    '.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v',
-    // audio-only support
-    '.mp3', '.flac', '.ogg', '.wav', '.m4a', '.aac',
+    // Video formats
+    '.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv', '.ts',
+    // Audio-only formats
+    '.mp3', '.flac', '.ogg', '.wav', '.m4a', '.aac', '.opus', '.wma', '.alac',
   };
 
   /// Scan [rootPath] recursively and return all karaoke files found.

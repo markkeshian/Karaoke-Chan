@@ -82,8 +82,7 @@ class SettingsScreen extends ConsumerWidget {
                 icon: Icons.mic,
                 iconColor: AppTheme.primary,
                 title: 'Karaoke-Chan',
-                subtitle:
-                    'Version 1.0.0 — Cross-platform offline karaoke player',
+                subtitle: 'Version 1.0.0 — Local & Online Karaoke Player',
               ),
               _Divider(),
               _SettingsTile(
@@ -91,26 +90,34 @@ class SettingsScreen extends ConsumerWidget {
                 iconColor: AppTheme.secondary,
                 title: 'Description',
                 subtitle:
-                    'Karaoke-Chan is a local karaoke player designed for browsing, queueing, and playing your karaoke videos from your own folders.',
+                    'Browse and queue your local karaoke files, or search and play songs directly from YouTube — all in one place.',
+              ),
+              _Divider(),
+              _SettingsTile(
+                icon: Icons.queue_music,
+                iconColor: AppTheme.primary,
+                title: 'Features',
+                subtitle:
+                    'Local file playback · YouTube search & streaming · Mixed queue (local + online) · Pre-fetched online playback · Auto-advance queue',
               ),
               _Divider(),
               _SettingsTile(
                 icon: Icons.person_outline,
-                iconColor: AppTheme.primary,
+                iconColor: AppTheme.secondary,
                 title: 'Developer',
                 subtitle: 'Mark Keshian M. Mangabay',
               ),
               _Divider(),
               _SettingsTile(
                 icon: Icons.devices,
-                iconColor: AppTheme.secondary,
+                iconColor: AppTheme.primary,
                 title: 'Platform Support',
                 subtitle: 'Android · macOS · Windows',
               ),
               _Divider(),
               _SettingsTile(
                 icon: Icons.copyright,
-                iconColor: AppTheme.primary,
+                iconColor: AppTheme.secondary,
                 title: 'License',
                 subtitle: '© 2026 Karaoke-Chan. All rights reserved.',
               ),

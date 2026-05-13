@@ -20,17 +20,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gap/gap.dart';
-import 'package:go_router/go_router.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:path/path.dart' as p;
-
-import 'package:karaoke_chan/core/router/app_router.dart';
+import 'package:karaoke_chan/core/services/youtube_service.dart';
 import 'package:karaoke_chan/features/library/data/library_notifier.dart';
 import 'package:karaoke_chan/features/library/data/song_model.dart';
+import 'package:karaoke_chan/features/library/data/youtube_search_notifier.dart';
 import 'package:karaoke_chan/features/player/data/player_notifier.dart';
 import 'package:karaoke_chan/features/player/data/player_state.dart';
 import 'package:karaoke_chan/features/queue/data/queue_entry_model.dart';
 import 'package:karaoke_chan/features/queue/data/queue_notifier.dart';
+
+// ── Search mode ──────────────────────────────────────────────────────────────
+enum SearchMode { local, online }
 
 // ── Design tokens (match HTML) ───────────────────────────────────────────────
 const _bg = Color(0xFF111827);
@@ -55,26 +56,56 @@ class KaraokeStage extends ConsumerStatefulWidget {
 class _KaraokeStageState extends ConsumerState<KaraokeStage> {
   final _search = TextEditingController();
   final _focusNode = FocusNode();
+  final _searchFocusNode = FocusNode();
   bool _fullscreen = false;
   bool _isChangingFolder = false;
+  bool _showSettings = false;
   double? _sidebarWidth;
   double _queueHeight = 220;
+  SearchMode _searchMode = SearchMode.local;
+  Timer? _ytDebounce;
+
+  @override
+  void initState() {
+    super.initState();
+    HardwareKeyboard.instance.addHandler(_handleKey);
+  }
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKey);
+    _ytDebounce?.cancel();
     _search.dispose();
+    _searchFocusNode.dispose();
     _focusNode.dispose();
     super.dispose();
   }
 
-  void _handleKey(KeyEvent event) {
-    if (event is! KeyDownEvent) return;
+  bool _handleKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    // Don't steal keyboard shortcuts while the search bar is focused.
+    if (_searchFocusNode.hasFocus) return false;
     final key = event.logicalKey;
-    if (key == LogicalKeyboardKey.keyF) {
+    if (key == LogicalKeyboardKey.keyF || key == LogicalKeyboardKey.f11) {
       setState(() => _fullscreen = !_fullscreen);
-    } else if (key == LogicalKeyboardKey.escape && _fullscreen) {
-      setState(() => _fullscreen = false);
+      return true;
     }
+    if (key == LogicalKeyboardKey.escape && _fullscreen) {
+      setState(() => _fullscreen = false);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.space ||
+        key == LogicalKeyboardKey.mediaPlayPause) {
+      ref.read(playerProvider.notifier).togglePlayPause();
+      return true;
+    }
+    if (key == LogicalKeyboardKey.mediaTrackNext ||
+        key == LogicalKeyboardKey.arrowRight &&
+            HardwareKeyboard.instance.isMetaPressed) {
+      ref.read(playerProvider.notifier).skip();
+      return true;
+    }
+    return false;
   }
 
   @override
@@ -83,122 +114,147 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
     final playerAsync = ref.watch(playerProvider);
     final queueAsync = ref.watch(queueNotifierProvider);
 
-    return KeyboardListener(
-      focusNode: _focusNode,
-      autofocus: true,
-      onKeyEvent: _handleKey,
-      child: Scaffold(
-        resizeToAvoidBottomInset: false,
-        backgroundColor: _bg,
-        body: libraryAsync.when(
-          loading: () =>
-              const Center(child: CircularProgressIndicator(color: _purple)),
-          error: (e, _) => Center(
-              child: Text('Error: $e',
-                  style: const TextStyle(color: Colors.white70))),
-          data: (library) {
-            if (!library.hasFolder || _isChangingFolder) {
-              return _FolderPickerView(
-                onPick: () async {
-                  await ref.read(libraryProvider.notifier).pickFolder();
-                  if (mounted) setState(() => _isChangingFolder = false);
-                },
-                onCancel: library.hasFolder
-                    ? () => setState(() => _isChangingFolder = false)
-                    : null,
-              );
-            }
-            if (library.isScanning) {
-              return _ScanningView(library: library);
-            }
-            if (library.status == ScanStatus.error) {
-              return _ScanErrorView(
-                message: library.errorMessage ?? 'Unknown scan error',
-                onRetry: () => ref.read(libraryProvider.notifier).pickFolder(),
-              );
-            }
+    return Scaffold(
+      resizeToAvoidBottomInset: false,
+      backgroundColor: _bg,
+      body: libraryAsync.when(
+        loading: () =>
+            const Center(child: CircularProgressIndicator(color: _purple)),
+        error: (e, _) => Center(
+            child: Text('Error: $e',
+                style: const TextStyle(color: Colors.white70))),
+        data: (library) {
+          if (!library.hasFolder || _isChangingFolder) {
+            return _FolderPickerView(
+              onPick: () async {
+                await ref.read(libraryProvider.notifier).pickFolder();
+                if (mounted) setState(() => _isChangingFolder = false);
+              },
+              onCancel: library.hasFolder
+                  ? () => setState(() => _isChangingFolder = false)
+                  : null,
+            );
+          }
+          if (library.isScanning) {
+            return _ScanningView(library: library);
+          }
+          if (library.status == ScanStatus.error) {
+            return _ScanErrorView(
+              message: library.errorMessage ?? 'Unknown scan error',
+              onRetry: () => ref.read(libraryProvider.notifier).pickFolder(),
+            );
+          }
 
-            final player =
-                playerAsync.valueOrNull ?? const KaraokePlayerState();
-            final queue = queueAsync.valueOrNull ?? [];
+          final player = playerAsync.valueOrNull ?? const KaraokePlayerState();
+          final queue = queueAsync.valueOrNull ?? [];
 
-            return Row(
-              children: [
-                if (!_fullscreen) ...[
-                  _Sidebar(
-                    library: library,
-                    searchCtrl: _search,
-                    sidebarWidth: _sidebarWidth ??
-                        MediaQuery.sizeOf(context).width * 0.35,
-                    currentSongId: player.currentEntry?.songId,
-                    queuedSongIds: queue
-                        .where((e) =>
-                            e.status == QueueStatus.waiting ||
-                            e.status == QueueStatus.playing)
-                        .map((e) => e.songId)
-                        .toSet(),
-                    onQueue: (s) => _queueSong(s, player),
-                    onChangeFolder: () =>
-                        setState(() => _isChangingFolder = true),
-                  ),
-                  // ── Sidebar drag resizer ──────────────────────────────
-                  MouseRegion(
-                    cursor: SystemMouseCursors.resizeColumn,
-                    child: GestureDetector(
-                      onHorizontalDragUpdate: (d) {
-                        final screenW = MediaQuery.sizeOf(context).width;
-                        setState(() {
-                          _sidebarWidth =
-                              ((_sidebarWidth ?? screenW * 0.35) + d.delta.dx)
-                                  .clamp(220.0, screenW * 0.50);
-                        });
-                      },
-                      child: Container(
-                        width: 6,
-                        color: _border,
-                      ),
+          return Row(
+            children: [
+              if (!_fullscreen) ...[
+                _Sidebar(
+                  library: library,
+                  searchCtrl: _search,
+                  searchFocusNode: _searchFocusNode,
+                  sidebarWidth:
+                      _sidebarWidth ?? MediaQuery.sizeOf(context).width * 0.35,
+                  currentSongId: player.currentEntry?.songId,
+                  queuedSongIds: queue
+                      .where((e) =>
+                          e.status == QueueStatus.waiting ||
+                          e.status == QueueStatus.playing)
+                      .map((e) => e.songId)
+                      .toSet(),
+                  onQueue: (s) => _queueSong(s, player),
+                  onChangeFolder: () =>
+                      setState(() => _isChangingFolder = true),
+                  searchMode: _searchMode,
+                  onSearchModeChanged: (mode) {
+                    setState(() {
+                      _searchMode = mode;
+                      _ytDebounce?.cancel();
+                      // Re-run the current query in the new mode without clearing the text.
+                      final q = _search.text;
+                      if (mode == SearchMode.local) {
+                        ref.read(youtubeSearchProvider.notifier).clear();
+                        ref.read(libraryProvider.notifier).search(q);
+                      } else {
+                        ref.read(libraryProvider.notifier).search('');
+                        if (q.isNotEmpty) {
+                          ref.read(youtubeSearchProvider.notifier).search(q);
+                        } else {
+                          ref.read(youtubeSearchProvider.notifier).clear();
+                        }
+                      }
+                    });
+                  },
+                  onYoutubeSearch: (q) {
+                    _ytDebounce?.cancel();
+                    _ytDebounce = Timer(const Duration(milliseconds: 600), () {
+                      ref.read(youtubeSearchProvider.notifier).search(q);
+                    });
+                  },
+                  onYoutubePlay: (video) => _queueYoutube(video, player),
+                  showSettings: _showSettings,
+                  onToggleSettings: () =>
+                      setState(() => _showSettings = !_showSettings),
+                ),
+                // ── Sidebar drag resizer ──────────────────────────────
+                MouseRegion(
+                  cursor: SystemMouseCursors.resizeColumn,
+                  child: GestureDetector(
+                    onHorizontalDragUpdate: (d) {
+                      final screenW = MediaQuery.sizeOf(context).width;
+                      setState(() {
+                        _sidebarWidth =
+                            ((_sidebarWidth ?? screenW * 0.35) + d.delta.dx)
+                                .clamp(220.0, screenW * 0.50);
+                      });
+                    },
+                    child: Container(
+                      width: 6,
+                      color: _border,
                     ),
-                  ),
-                ],
-                Expanded(
-                  child: Column(
-                    children: [
-                      Expanded(
-                        child: _VideoArea(
-                          player: player,
-                          queue: queue,
-                          fullscreen: _fullscreen,
-                          onToggle: () =>
-                              setState(() => _fullscreen = !_fullscreen),
-                        ),
-                      ),
-                      if (!_fullscreen) ...[
-                        // ── Queue panel drag resizer ────────────────────
-                        MouseRegion(
-                          cursor: SystemMouseCursors.resizeRow,
-                          child: GestureDetector(
-                            onVerticalDragUpdate: (d) {
-                              final screenH = MediaQuery.sizeOf(context).height;
-                              setState(() {
-                                _queueHeight = (_queueHeight - d.delta.dy)
-                                    .clamp(150.0, screenH * 0.55);
-                              });
-                            },
-                            child: Container(
-                              height: 4,
-                              color: _border,
-                            ),
-                          ),
-                        ),
-                        _QueuePanel(queue: queue, height: _queueHeight),
-                      ],
-                    ],
                   ),
                 ),
               ],
-            );
-          },
-        ),
+              Expanded(
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: _VideoArea(
+                        player: player,
+                        queue: queue,
+                        fullscreen: _fullscreen,
+                        onToggle: () =>
+                            setState(() => _fullscreen = !_fullscreen),
+                      ),
+                    ),
+                    if (!_fullscreen) ...[
+                      // ── Queue panel drag resizer ────────────────────
+                      MouseRegion(
+                        cursor: SystemMouseCursors.resizeRow,
+                        child: GestureDetector(
+                          onVerticalDragUpdate: (d) {
+                            final screenH = MediaQuery.sizeOf(context).height;
+                            setState(() {
+                              _queueHeight = (_queueHeight - d.delta.dy)
+                                  .clamp(150.0, screenH * 0.55);
+                            });
+                          },
+                          child: Container(
+                            height: 4,
+                            color: _border,
+                          ),
+                        ),
+                      ),
+                      _QueuePanel(queue: queue, height: _queueHeight),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -208,13 +264,72 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
     if (player.isIdle) {
       ref.read(playerProvider.notifier).playNow(song);
     } else {
-      ref.read(queueNotifierProvider.notifier).enqueue(song.id!);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('"${song.title}" added to queue'),
-        duration: const Duration(seconds: 2),
-        backgroundColor: _cardBg,
-      ));
+      ref.read(playerProvider.notifier).queueLocal(song);
+      _showQueuedSnackBar(song.title);
     }
+  }
+
+  void _queueYoutube(YoutubeVideoResult video, KaraokePlayerState player) {
+    if (player.isIdle) {
+      ref.read(playerProvider.notifier).playYoutube(video);
+    } else {
+      ref.read(playerProvider.notifier).queueYoutube(video);
+      _showQueuedSnackBar(video.title);
+    }
+  }
+
+  void _showQueuedSnackBar(String title) {
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        padding: EdgeInsets.zero,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        duration: const Duration(seconds: 3),
+        content: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF1D4ED8), Color(0xFF059669)],
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+            ),
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: const [
+              BoxShadow(
+                  color: Colors.black45, blurRadius: 12, offset: Offset(0, 4)),
+            ],
+          ),
+          child: Row(children: [
+            const Icon(Icons.queue_music, color: Colors.white, size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Added to Queue',
+                      style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 2),
+                  Text(title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
+          ]),
+        ),
+      ),
+    );
   }
 }
 
@@ -230,81 +345,84 @@ class _FolderPickerView extends StatelessWidget {
     return Container(
       color: const Color(0xFF0F172A),
       child: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 420),
-              child: Container(
-                padding: const EdgeInsets.all(40),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1E293B),
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: const [
-                    BoxShadow(
-                        color: Colors.black54,
-                        blurRadius: 30,
-                        offset: Offset(0, 10)),
-                  ],
-                ),
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  Image.asset('assets/icons/applogo.png',
-                      height: 80, width: 80),
-                  const Gap(16),
-                  const Text('Karaoke-Chan',
-                      style: TextStyle(
-                          fontSize: 32,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white)),
-                  const Gap(12),
-                  const Text(
-                    'Please select a folder to browse your songs.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: _sub, fontSize: 15, height: 1.5),
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Container(
+                  padding: const EdgeInsets.all(40),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(24),
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Colors.black54,
+                          blurRadius: 30,
+                          offset: Offset(0, 10)),
+                    ],
                   ),
-                  const Gap(32),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: onPick,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _queueGreen,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        textStyle: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.bold),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14)),
-                      ),
-                      icon: const Icon(Icons.folder_open),
-                      label: const Text('📁  Select Karaoke Folder'),
-                    ),
-                  ),
-                  if (onCancel != null) ...[
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Image.asset('assets/icons/applogo.png',
+                        height: 80, width: 80),
+                    const Gap(16),
+                    const Text('Karaoke-Chan',
+                        style: TextStyle(
+                            fontSize: 32,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white)),
                     const Gap(12),
+                    const Text(
+                      'Please select a folder to browse your songs.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: _sub, fontSize: 15, height: 1.5),
+                    ),
+                    const Gap(32),
                     SizedBox(
                       width: double.infinity,
-                      child: TextButton(
-                        onPressed: onCancel,
-                        style: TextButton.styleFrom(
-                          foregroundColor: Colors.white54,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
+                      child: ElevatedButton.icon(
+                        onPressed: onPick,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _queueGreen,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          textStyle: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14)),
                         ),
-                        child: const Text('Cancel',
-                            style: TextStyle(fontSize: 15)),
+                        icon: const Icon(Icons.folder_open),
+                        label: const Text('📁  Select Karaoke Folder'),
                       ),
                     ),
-                  ],
-                  const Gap(16),
-                  const Text('Supports MP4 · MKV · AVI · MP3 · FLAC · and more',
-                      style: TextStyle(color: Colors.white30, fontSize: 12)),
-                ]),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
+                    if (onCancel != null) ...[
+                      const Gap(12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: TextButton(
+                          onPressed: onCancel,
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.white54,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: const Text('Cancel',
+                              style: TextStyle(fontSize: 15)),
+                        ),
+                      ),
+                    ],
+                    const Gap(16),
+                    const Text(
+                        'Supports MP4 · MKV · AVI · MP3 · FLAC · and more',
+                        style: TextStyle(color: Colors.white30, fontSize: 12)),
+                  ]), // Column
+                ), // inner Container
+              ), // ConstrainedBox
+            ), // inner Center
+          ), // SingleChildScrollView
+        ), // outer Center
+      ), // SafeArea
+    ); // outer Container
   }
 }
 
@@ -402,20 +520,34 @@ class _Sidebar extends ConsumerWidget {
   const _Sidebar({
     required this.library,
     required this.searchCtrl,
+    required this.searchFocusNode,
     required this.sidebarWidth,
     required this.currentSongId,
     required this.queuedSongIds,
     required this.onQueue,
     required this.onChangeFolder,
+    required this.searchMode,
+    required this.onSearchModeChanged,
+    required this.onYoutubeSearch,
+    required this.onYoutubePlay,
+    required this.showSettings,
+    required this.onToggleSettings,
   });
 
   final LibraryState library;
   final TextEditingController searchCtrl;
+  final FocusNode searchFocusNode;
   final double sidebarWidth;
   final int? currentSongId;
   final Set<int> queuedSongIds;
   final void Function(Song) onQueue;
   final VoidCallback onChangeFolder;
+  final SearchMode searchMode;
+  final void Function(SearchMode) onSearchModeChanged;
+  final void Function(String query) onYoutubeSearch;
+  final void Function(YoutubeVideoResult video) onYoutubePlay;
+  final bool showSettings;
+  final VoidCallback onToggleSettings;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -452,77 +584,601 @@ class _Sidebar extends ConsumerWidget {
                                 color: Colors.white)),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.settings_outlined,
-                            color: Colors.white38, size: 18),
-                        tooltip: 'Settings',
-                        onPressed: () => context.push(AppRoutes.settings),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.folder_open_outlined,
-                            color: Colors.white38, size: 18),
-                        tooltip: 'Change folder',
-                        onPressed: onChangeFolder,
-                      ),
-                    ]),
-                    const Gap(12),
-                    ValueListenableBuilder<TextEditingValue>(
-                      valueListenable: searchCtrl,
-                      builder: (context, value, _) => TextField(
-                        controller: searchCtrl,
-                        style:
-                            const TextStyle(color: Colors.white, fontSize: 15),
-                        decoration: InputDecoration(
-                          hintText: 'Search songs...',
-                          hintStyle: const TextStyle(color: Colors.white38),
-                          prefixIcon:
-                              const Icon(Icons.search, color: Colors.white38),
-                          suffixIcon: value.text.isNotEmpty
-                              ? IconButton(
-                                  icon: const Icon(Icons.clear,
-                                      color: Colors.white38, size: 18),
-                                  onPressed: () {
-                                    searchCtrl.clear();
-                                    ref
-                                        .read(libraryProvider.notifier)
-                                        .search('');
-                                  },
-                                )
-                              : null,
-                          filled: true,
-                          fillColor: _cardBg,
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 14),
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide.none),
+                        icon: Icon(
+                          showSettings ? Icons.close : Icons.settings_outlined,
+                          color: showSettings ? Colors.white70 : Colors.white38,
+                          size: 18,
                         ),
-                        onChanged: (q) =>
-                            ref.read(libraryProvider.notifier).search(q),
+                        tooltip: showSettings ? 'Close Settings' : 'Settings',
+                        onPressed: onToggleSettings,
                       ),
-                    ),
+                      if (!showSettings)
+                        IconButton(
+                          icon: const Icon(Icons.folder_open_outlined,
+                              color: Colors.white38, size: 18),
+                          tooltip: 'Change folder',
+                          onPressed: onChangeFolder,
+                        ),
+                    ]),
+                    if (!showSettings) ...[
+                      const Gap(12),
+                      ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: searchCtrl,
+                        builder: (context, value, _) => TextField(
+                          controller: searchCtrl,
+                          focusNode: searchFocusNode,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 15),
+                          decoration: InputDecoration(
+                            hintText: searchMode == SearchMode.online
+                                ? 'Search on YouTube...'
+                                : 'Search songs...',
+                            hintStyle: const TextStyle(color: Colors.white38),
+                            prefixIcon:
+                                const Icon(Icons.search, color: Colors.white38),
+                            suffixIcon: value.text.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear,
+                                        color: Colors.white38, size: 18),
+                                    onPressed: () {
+                                      searchCtrl.clear();
+                                      ref
+                                          .read(libraryProvider.notifier)
+                                          .search('');
+                                    },
+                                  )
+                                : null,
+                            filled: true,
+                            fillColor: _cardBg,
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 14),
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide.none),
+                          ),
+                          onChanged: (q) {
+                            if (searchMode == SearchMode.local) {
+                              ref.read(libraryProvider.notifier).search(q);
+                            } else {
+                              onYoutubeSearch(q);
+                            }
+                          },
+                        ),
+                      ),
+                      const Gap(10),
+                      _SearchModeToggle(
+                        mode: searchMode,
+                        onChanged: onSearchModeChanged,
+                      ),
+                    ],
                   ]),
             ),
 
-            // ── Song list ──────────────────────────────────────────────────
-            Expanded(
-              child: library.songs.isEmpty
-                  ? const Center(
-                      child: Text('No songs found',
-                          style: TextStyle(color: Colors.white38)))
-                  : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(15, 15, 15, 64),
-                      itemCount: library.songs.length,
-                      itemBuilder: (_, i) => _SongItem(
-                        song: library.songs[i],
-                        isCurrent: library.songs[i].id == currentSongId,
-                        isQueued: library.songs[i].id != null &&
-                            queuedSongIds.contains(library.songs[i].id),
-                        onQueue: () => onQueue(library.songs[i]),
-                      ),
-                    ),
-            ),
+            // ── Body: Settings panel OR Song list ──────────────────────────
+            if (showSettings)
+              Expanded(
+                child: _SidebarSettingsPanel(
+                  onChangeFolder: onChangeFolder,
+                  onClose: onToggleSettings,
+                ),
+              )
+            else
+              Expanded(
+                child: searchMode == SearchMode.online
+                    ? _OnlineResultsList(onPlay: onYoutubePlay)
+                    : library.songs.isEmpty
+                        ? const Center(
+                            child: Text('No songs found',
+                                style: TextStyle(color: Colors.white38)))
+                        : ListView.builder(
+                            padding: const EdgeInsets.fromLTRB(15, 15, 15, 64),
+                            itemCount: library.songs.length,
+                            itemBuilder: (_, i) => _SongItem(
+                              song: library.songs[i],
+                              isCurrent: library.songs[i].id == currentSongId,
+                              isQueued: library.songs[i].id != null &&
+                                  queuedSongIds.contains(library.songs[i].id),
+                              onQueue: () => onQueue(library.songs[i]),
+                            ),
+                          ),
+              ),
           ]),
         ),
+      ),
+    );
+  }
+}
+
+// ── Sidebar settings panel ───────────────────────────────────────────────────
+
+class _SidebarSettingsPanel extends ConsumerWidget {
+  const _SidebarSettingsPanel({
+    required this.onChangeFolder,
+    required this.onClose,
+  });
+  final VoidCallback onChangeFolder;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      children: [
+        // ── Library ─────────────────────────────────────────────────────
+        const _SettingsSectionLabel(label: 'Library'),
+        const Gap(8),
+        _SettingsItem(
+          icon: Icons.folder_open,
+          iconColor: _queueGreen,
+          title: 'Change Karaoke Folder',
+          subtitle: 'Pick a different root folder to scan',
+          onTap: () {
+            ref.read(libraryProvider.notifier).changeFolder();
+          },
+        ),
+        const Gap(6),
+        _SettingsItem(
+          icon: Icons.restart_alt,
+          iconColor: Colors.orangeAccent,
+          title: 'Restart App',
+          subtitle: 'Clear all cache and return to folder selection',
+          onTap: () => _confirmRestart(context, ref),
+        ),
+        const Gap(20),
+
+        // ── Queue ────────────────────────────────────────────────────────
+        const _SettingsSectionLabel(label: 'Queue'),
+        const Gap(8),
+        _SettingsItem(
+          icon: Icons.cleaning_services,
+          iconColor: Colors.redAccent,
+          title: 'Clear Queue',
+          subtitle: 'Remove all waiting entries',
+          onTap: () => _confirmClearQueue(context, ref),
+        ),
+        const Gap(20),
+
+        // ── About ────────────────────────────────────────────────────────
+        const _SettingsSectionLabel(label: 'About'),
+        const Gap(8),
+        const _SettingsItem(
+          icon: Icons.mic,
+          iconColor: _purple,
+          title: 'Karaoke-Chan  v1.0.0',
+          subtitle: 'Local & Online Karaoke Player',
+        ),
+        const Gap(6),
+        const _SettingsItem(
+          icon: Icons.queue_music,
+          iconColor: Color(0xFF3B82F6),
+          title: 'Features',
+          subtitle:
+              'Local files · YouTube search & streaming · Mixed queue · Auto-advance',
+        ),
+        const Gap(6),
+        const _SettingsItem(
+          icon: Icons.person_outline,
+          iconColor: Colors.white38,
+          title: 'Developer',
+          subtitle: 'Mark Keshian M. Mangabay',
+        ),
+        const Gap(6),
+        const _SettingsItem(
+          icon: Icons.devices,
+          iconColor: Colors.white38,
+          title: 'Platform',
+          subtitle: 'Android · macOS · Windows',
+        ),
+        const Gap(6),
+        const _SettingsItem(
+          icon: Icons.copyright,
+          iconColor: Colors.white38,
+          title: 'License',
+          subtitle: '© 2026 Karaoke-Chan. All rights reserved.',
+        ),
+      ],
+    );
+  }
+
+  void _confirmRestart(BuildContext context, WidgetRef ref) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _cardBg,
+        title:
+            const Text('Restart App?', style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'This will clear all queue entries, remove the saved folder, and return you to folder selection.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child:
+                const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              await ref.read(libraryProvider.notifier).resetToStart();
+            },
+            child: const Text('Restart',
+                style: TextStyle(
+                    color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmClearQueue(BuildContext context, WidgetRef ref) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _cardBg,
+        title:
+            const Text('Clear Queue?', style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'This will remove all entries from the queue.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child:
+                const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              await ref.read(queueNotifierProvider.notifier).clearAll();
+            },
+            child:
+                const Text('Clear', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsSectionLabel extends StatelessWidget {
+  const _SettingsSectionLabel({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label.toUpperCase(),
+      style: const TextStyle(
+        color: Colors.white38,
+        fontSize: 10,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 1.5,
+      ),
+    );
+  }
+}
+
+class _SettingsItem extends StatefulWidget {
+  const _SettingsItem({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.subtitle,
+    this.onTap,
+  });
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String subtitle;
+  final VoidCallback? onTap;
+
+  @override
+  State<_SettingsItem> createState() => _SettingsItemState();
+}
+
+class _SettingsItemState extends State<_SettingsItem> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: _hovered && widget.onTap != null ? _cardHover : _cardBg,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(children: [
+            Icon(widget.icon, color: widget.iconColor, size: 18),
+            const Gap(12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(widget.title,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600)),
+                  const Gap(2),
+                  Text(widget.subtitle,
+                      style:
+                          const TextStyle(color: Colors.white38, fontSize: 11),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+                ],
+              ),
+            ),
+            if (widget.onTap != null)
+              const Icon(Icons.chevron_right, color: Colors.white24, size: 16),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Search mode toggle ────────────────────────────────────────────────────────
+
+class _SearchModeToggle extends StatelessWidget {
+  const _SearchModeToggle({required this.mode, required this.onChanged});
+  final SearchMode mode;
+  final void Function(SearchMode) onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 36,
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(children: [
+        _ToggleBtn(
+          label: '🟢  Local',
+          active: mode == SearchMode.local,
+          activeColor: const Color(0xFF22C55E),
+          onTap: () => onChanged(SearchMode.local),
+        ),
+        _ToggleBtn(
+          label: '🔵  Online',
+          active: mode == SearchMode.online,
+          activeColor: const Color(0xFF3B82F6),
+          onTap: () => onChanged(SearchMode.online),
+        ),
+      ]),
+    );
+  }
+}
+
+class _ToggleBtn extends StatelessWidget {
+  const _ToggleBtn({
+    required this.label,
+    required this.active,
+    required this.activeColor,
+    required this.onTap,
+  });
+  final String label;
+  final bool active;
+  final Color activeColor;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          decoration: BoxDecoration(
+            color: active
+                ? activeColor.withValues(alpha: 0.25)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            border: active ? Border.all(color: activeColor, width: 1.5) : null,
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: active ? activeColor : Colors.white38,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Online results list ───────────────────────────────────────────────────────
+
+class _OnlineResultsList extends ConsumerWidget {
+  const _OnlineResultsList({required this.onPlay});
+  final void Function(YoutubeVideoResult) onPlay;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ytState = ref.watch(youtubeSearchProvider);
+
+    if (ytState.isIdle) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.language, color: Color(0xFF3B82F6), size: 36),
+                Gap(10),
+                Text('Online Search',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold)),
+                Gap(6),
+                Text(
+                  'Type a song name above to search YouTube.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      color: Colors.white38, fontSize: 12, height: 1.4),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (ytState.isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: Color(0xFF3B82F6)),
+      );
+    }
+
+    if (ytState.status == YoutubeSearchStatus.error) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.wifi_off, color: Colors.redAccent, size: 32),
+                const Gap(10),
+                const Text('Search failed',
+                    style: TextStyle(
+                        color: Colors.redAccent,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13)),
+                const Gap(6),
+                Text(ytState.errorMessage ?? 'Unknown error',
+                    textAlign: TextAlign.center,
+                    style:
+                        const TextStyle(color: Colors.white38, fontSize: 12)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (ytState.isEmpty) {
+      return const Center(
+        child:
+            Text('No results found', style: TextStyle(color: Colors.white38)),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(15, 15, 15, 64),
+      itemCount: ytState.results.length,
+      itemBuilder: (_, i) => _YoutubeResultItem(
+        video: ytState.results[i],
+        onPlay: () => onPlay(ytState.results[i]),
+      ),
+    );
+  }
+}
+
+class _YoutubeResultItem extends ConsumerStatefulWidget {
+  const _YoutubeResultItem({required this.video, required this.onPlay});
+  final YoutubeVideoResult video;
+  final VoidCallback onPlay;
+
+  @override
+  ConsumerState<_YoutubeResultItem> createState() => _YoutubeResultItemState();
+}
+
+class _YoutubeResultItemState extends ConsumerState<_YoutubeResultItem> {
+  bool _hovered = false;
+
+  String _formatDuration(Duration? d) {
+    if (d == null) return '';
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return d.inHours > 0 ? '${d.inHours}:$m:$s' : '$m:$s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final unifiedQueue =
+        ref.watch(playerProvider).valueOrNull?.unifiedQueue ?? const [];
+    final isQueued = unifiedQueue.any(
+        (i) => i.isYoutube && i.youtubeVideo?.videoId == widget.video.videoId);
+
+    const blueQueue = Color(0xFF3B82F6);
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(15),
+        decoration: BoxDecoration(
+          color: _hovered ? _cardHover : _cardBg,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(children: [
+          // ── Info ─────────────────────────────────────────────────────
+          Expanded(
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(
+                widget.video.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white),
+              ),
+              const Gap(4),
+              Text(
+                widget.video.channel.isNotEmpty
+                    ? 'Channel: ${widget.video.channel}'
+                    : widget.video.duration != null
+                        ? _formatDuration(widget.video.duration)
+                        : 'YouTube',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: _sub, fontSize: 13),
+              ),
+            ]),
+          ),
+          const Gap(8),
+          // ── Queue button ─────────────────────────────────────────────
+          isQueued
+              ? const Tooltip(
+                  message: 'Already queued',
+                  child: Icon(Icons.check_circle,
+                      color: Color(0xFF3B82F6), size: 22),
+                )
+              : ElevatedButton.icon(
+                  onPressed: widget.onPlay,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: blueQueue,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                    textStyle: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 12),
+                    minimumSize: Size.zero,
+                  ),
+                  icon: const Icon(Icons.add, size: 14),
+                  label: const Text('QUEUE'),
+                ),
+        ]),
       ),
     );
   }
@@ -593,27 +1249,28 @@ class _SongItemState extends State<_SongItem> {
               ),
             ]),
           ),
-          const Gap(12),
-          ElevatedButton.icon(
-            onPressed: widget.isQueued ? null : widget.onQueue,
-            style: ElevatedButton.styleFrom(
-              backgroundColor:
-                  widget.isQueued ? const Color(0xFF374151) : _queueGreen,
-              foregroundColor: widget.isQueued ? Colors.white38 : Colors.white,
-              disabledBackgroundColor: const Color(0xFF374151),
-              disabledForegroundColor: Colors.white38,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
-              textStyle:
-                  const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-              minimumSize: Size.zero,
-            ),
-            icon: widget.isQueued
-                ? const Icon(Icons.check, size: 14)
-                : const Icon(Icons.add, size: 14),
-            label: Text(widget.isQueued ? 'QUEUED' : 'QUEUE'),
-          ),
+          const Gap(8),
+          widget.isQueued
+              ? const Tooltip(
+                  message: 'Already queued',
+                  child: Icon(Icons.check_circle, color: _queueGreen, size: 22),
+                )
+              : ElevatedButton.icon(
+                  onPressed: widget.onQueue,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _queueGreen,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                    textStyle: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 12),
+                    minimumSize: Size.zero,
+                  ),
+                  icon: const Icon(Icons.add, size: 14),
+                  label: const Text('QUEUE'),
+                ),
         ]),
       ),
     );
@@ -727,11 +1384,43 @@ class _VideoAreaState extends ConsumerState<_VideoArea> {
               ),
 
             // Audio-only indicator
-            if (!player.isIdle && !player.hasVideo && !player.hasError)
+            if (!player.isIdle &&
+                !player.isLoading &&
+                !player.hasVideo &&
+                !player.hasError)
               const Center(
                 child: Text(
                   '♫  Playing Audio',
                   style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 22),
+                ),
+              ),
+
+            // Loading indicator (YouTube stream resolving / file opening)
+            if (player.isLoading)
+              Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(
+                      color: Color(0xFF3B82F6),
+                      strokeWidth: 3,
+                    ),
+                    const Gap(16),
+                    Text(
+                      player.currentEntry?.song?.title ?? 'Loading…',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500),
+                    ),
+                    const Gap(6),
+                    const Text(
+                      'Preparing stream…',
+                      style: TextStyle(color: Colors.white38, fontSize: 12),
+                    ),
+                  ],
                 ),
               ),
 
@@ -973,8 +1662,10 @@ class _QueuePanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final waiting =
-        queue.where((e) => e.status == QueueStatus.waiting).toList();
+    final unifiedQueue =
+        ref.watch(playerProvider).valueOrNull?.unifiedQueue ?? const [];
+    final totalCount = unifiedQueue.length;
+
     return SafeArea(
       top: false,
       left: false,
@@ -989,26 +1680,48 @@ class _QueuePanel extends ConsumerWidget {
         child: ClipRect(
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('Queue List',
-                style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white)),
+            Row(children: [
+              const Text('Queue List',
+                  style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white)),
+              if (totalCount > 0) ...[
+                const Gap(10),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _cardBg,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text('$totalCount',
+                      style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ]),
             const Gap(12),
             Expanded(
-              child: waiting.isEmpty
+              child: totalCount == 0
                   ? const Center(
                       child: Text('Queue is empty',
                           style: TextStyle(color: Colors.white38)))
                   : ListView.builder(
-                      itemCount: waiting.length,
-                      itemBuilder: (_, i) => _QueueItem(
-                        entry: waiting[i],
-                        position: i + 1,
-                        onRemove: () => ref
-                            .read(queueNotifierProvider.notifier)
-                            .remove(waiting[i].id!),
-                      ),
+                      itemCount: unifiedQueue.length,
+                      itemBuilder: (_, i) {
+                        final item = unifiedQueue[i];
+                        return _QueueItem(
+                          label: item.title,
+                          position: i + 1,
+                          isYoutube: item.isYoutube,
+                          onRemove: () => ref
+                              .read(playerProvider.notifier)
+                              .removeQueueItemAt(i),
+                        );
+                      },
                     ),
             ),
           ]),
@@ -1019,26 +1732,48 @@ class _QueuePanel extends ConsumerWidget {
 }
 
 class _QueueItem extends StatelessWidget {
-  const _QueueItem(
-      {required this.entry, required this.position, required this.onRemove});
-  final QueueEntry entry;
+  const _QueueItem({
+    required this.label,
+    required this.position,
+    required this.isYoutube,
+    required this.onRemove,
+  });
+  final String label;
   final int position;
-  final VoidCallback onRemove;
+  final bool isYoutube;
+  final VoidCallback? onRemove;
 
   @override
   Widget build(BuildContext context) {
-    final song = entry.song;
-    final displayName = song != null
-        ? p.basenameWithoutExtension(song.filePath)
-        : 'Song #${entry.songId}';
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
           color: _cardBg, borderRadius: BorderRadius.circular(12)),
       child: Row(children: [
+        // ── Source badge ────────────────────────────────────────────
+        Container(
+          width: 22,
+          height: 22,
+          margin: const EdgeInsets.only(right: 10),
+          decoration: BoxDecoration(
+            color: isYoutube
+                ? const Color(0xFF1D4ED8).withValues(alpha: 0.3)
+                : _queueGreen.withValues(alpha: 0.2),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Icon(
+            isYoutube ? Icons.language : Icons.music_note,
+            size: 13,
+            color: isYoutube ? const Color(0xFF60A5FA) : _queueGreen,
+          ),
+        ),
+        // ── Position ────────────────────────────────────────────────
+        Text('$position. ',
+            style: const TextStyle(color: Colors.white38, fontSize: 13)),
+        // ── Title ───────────────────────────────────────────────────
         Expanded(
-          child: Text(displayName,
+          child: Text(label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
@@ -1047,10 +1782,11 @@ class _QueueItem extends StatelessWidget {
                   fontSize: 14)),
         ),
         const Gap(8),
-        GestureDetector(
-          onTap: onRemove,
-          child: const Icon(Icons.close, color: Colors.white38, size: 16),
-        ),
+        if (onRemove != null)
+          GestureDetector(
+            onTap: onRemove,
+            child: const Icon(Icons.close, color: Colors.white38, size: 16),
+          ),
       ]),
     );
   }

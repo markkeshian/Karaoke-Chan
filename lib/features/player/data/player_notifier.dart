@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
+import 'package:karaoke_chan/core/services/youtube_service.dart';
 import 'package:karaoke_chan/features/library/data/song_model.dart';
 import 'package:karaoke_chan/features/queue/data/queue_entry_model.dart';
 import 'package:karaoke_chan/features/queue/data/queue_notifier.dart';
@@ -20,6 +21,18 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   // AND prevents concurrent advances from stacking up.
   bool _isAdvancing = false;
 
+  /// In-memory ordered queue — preserves insertion order across local + YouTube.
+  final List<UnifiedQueueItem> _orderedQueue = [];
+
+  /// Pre-fetched stream URLs keyed by videoId — populated when a YouTube
+  /// video is queued so it's ready by the time it's their turn to play.
+  final Map<String, String> _streamUrlCache = {};
+
+  /// Debounce timer for the paused state on YouTube songs — prevents brief
+  /// playing=false events from network glitches (e.g. ffurl_read) from
+  /// incorrectly flipping the play/pause button.
+  Timer? _ytPauseDebounce;
+
   @override
   Future<KaraokePlayerState> build() async {
     _disposed = false;
@@ -28,6 +41,7 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
     _attachListeners();
     ref.onDispose(() {
       _disposed = true;
+      _ytPauseDebounce?.cancel();
       for (final s in _subs) {
         s.cancel();
       }
@@ -39,14 +53,39 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   void _attachListeners() {
     _subs.add(_player.stream.playing.listen((playing) {
       _update((s) {
-        if (playing) return s.copyWith(status: PlayerStatus.playing);
-        // Don't overwrite 'idle' with 'paused' — idle is set explicitly by
-        // _advanceQueue when the queue is empty. The playing=false event from
-        // player.stop() arrives asynchronously AFTER we set idle, and would
-        // otherwise reset it to paused, breaking the "add song → auto-play" flow.
-        if (s.isIdle) return s;
+        if (playing) {
+          // Cancel any pending debounced-pause when play resumes.
+          _ytPauseDebounce?.cancel();
+          return s.copyWith(status: PlayerStatus.playing);
+        }
+        // Don't overwrite 'idle' or 'loading' with 'paused'.
+        if (s.isIdle || s.isLoading) return s;
+        // Don't set paused while buffering.
+        if (_player.state.buffering) return s;
+        // For YouTube songs, debounce the paused state — network glitches
+        // (e.g. ffurl_read) fire playing=false briefly but the player recovers
+        // on its own. Only commit to paused after 600ms of sustained false.
+        if (s.currentEntry?.songId == -1) {
+          _ytPauseDebounce?.cancel();
+          _ytPauseDebounce = Timer(const Duration(milliseconds: 600), () {
+            if (!_player.state.playing && !_disposed) {
+              _update((s2) {
+                if (s2.isIdle || s2.isLoading) return s2;
+                return s2.copyWith(status: PlayerStatus.paused);
+              });
+            }
+          });
+          return s; // keep current status while debouncing
+        }
         return s.copyWith(status: PlayerStatus.paused);
       });
+    }));
+    // When buffering ends and the player is still supposed to be playing,
+    // make sure our status reflects that.
+    _subs.add(_player.stream.buffering.listen((buffering) {
+      if (!buffering && _player.state.playing) {
+        _update((s) => s.copyWith(status: PlayerStatus.playing));
+      }
     }));
     _subs.add(_player.stream.position.listen((pos) {
       _update((s) => s.copyWith(position: pos));
@@ -58,6 +97,33 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
       if (completed && !_isAdvancing) _onTrackCompleted();
     }));
     _subs.add(_player.stream.error.listen((err) {
+      // Ignore low-level FFmpeg/network warnings that don't stop playback.
+      // These are noisy but non-fatal — the player recovers on its own.
+      const ignoredPatterns = [
+        'ffurl_read',
+        'tcp:',
+        'http:',
+        'Connection reset',
+        'Operation timed out',
+        'AVERROR',
+      ];
+      if (ignoredPatterns.any((p) => err.contains(p))) return;
+
+      final current = state.value?.currentEntry;
+      // If a YouTube song fails, retry once with a freshly resolved stream URL.
+      if (current != null && current.songId == -1 && current.song != null) {
+        final video = YoutubeVideoResult(
+          videoId: Uri.parse(current.song!.filePath).queryParameters['v'] ?? '',
+          title: current.song!.title,
+          channel: current.song!.artist ?? '',
+          duration: null,
+          thumbnailUrl: '',
+        );
+        if (video.videoId.isNotEmpty) {
+          playYoutube(video, isRetry: true);
+          return;
+        }
+      }
       _update((s) => s.copyWith(status: PlayerStatus.error, errorMessage: err));
     }));
     _subs.add(_player.stream.tracks.listen((tracks) {
@@ -72,6 +138,112 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
       final hasVideo = track.video.id != 'no' && track.video.id != '';
       _update((s) => s.copyWith(hasVideo: hasVideo));
     }));
+  }
+
+  /// Adds a YouTube video to the in-memory queue to be played after the
+  /// current track finishes. Also pre-fetches the stream URL in the background
+  /// so playback can start immediately when this song's turn arrives.
+  void queueYoutube(YoutubeVideoResult video) {
+    final item = UnifiedQueueItem(
+      title: video.title,
+      isYoutube: true,
+      youtubeVideo: video,
+    );
+    _orderedQueue.add(item);
+    _update((s) => s.copyWith(unifiedQueue: List.unmodifiable(_orderedQueue)));
+
+    // Pre-fetch in the background — result stored in cache for use in playYoutube.
+    ref
+        .read(youtubeServiceProvider)
+        .getBestStreamUrl(video.videoId)
+        .then((url) {
+      if (url != null) _streamUrlCache[video.videoId] = url;
+    }).catchError((_) {
+      // Ignore pre-fetch errors — playYoutube will retry on-demand.
+    });
+  }
+
+  /// Enqueues a local song in the DB and registers it in the unified order
+  /// list so YouTube + local songs advance in the order they were added.
+  Future<void> queueLocal(Song song) async {
+    if (song.id == null) return;
+    final entry = await ref.read(queueRepositoryProvider).enqueue(song.id!);
+    final item = UnifiedQueueItem(
+      title: song.title,
+      isYoutube: false,
+      dbEntryId: entry.id,
+    );
+    _orderedQueue.add(item);
+    _update((s) => s.copyWith(unifiedQueue: List.unmodifiable(_orderedQueue)));
+    await ref.read(queueNotifierProvider.notifier).refresh();
+  }
+
+  /// Removes a pending queue item by its index in the unified queue.
+  Future<void> removeQueueItemAt(int index) async {
+    if (index < 0 || index >= _orderedQueue.length) return;
+    final item = _orderedQueue.removeAt(index);
+    _update((s) => s.copyWith(unifiedQueue: List.unmodifiable(_orderedQueue)));
+    // Evict any pre-fetched stream URL so we don't hold stale data.
+    if (item.isYoutube && item.youtubeVideo != null) {
+      _streamUrlCache.remove(item.youtubeVideo!.videoId);
+    }
+    if (!item.isYoutube && item.dbEntryId != null) {
+      await ref.read(queueNotifierProvider.notifier).remove(item.dbEntryId!);
+    }
+  }
+
+  /// Plays a YouTube video directly (no DB record — YouTube-only flow).
+  /// [video] provides metadata; the stream URL is resolved on-the-fly.
+  /// [_isRetry] is used internally to avoid infinite retry loops.
+  Future<void> playYoutube(YoutubeVideoResult video,
+      {bool isRetry = false}) async {
+    if (_disposed) return;
+
+    // Show loading state immediately with a synthetic entry so the UI
+    // can display the title while the stream URL is being resolved.
+    final syntheticSong = Song(
+      id: null,
+      title: video.title,
+      artist: video.channel,
+      filePath: video.watchUrl,
+      hasVideo: true,
+    );
+    final syntheticEntry = QueueEntry(
+      id: null,
+      songId: -1,
+      position: 0,
+      status: QueueStatus.playing,
+      song: syntheticSong,
+    );
+
+    _update((s) => s.copyWith(
+          currentEntry: syntheticEntry,
+          status: PlayerStatus.loading,
+          position: Duration.zero,
+          duration: Duration.zero,
+          hasVideo: false,
+        ));
+
+    // Stop current playback immediately so the user sees the loading screen
+    // right away instead of waiting for the stream URL to resolve.
+    await _player.stop();
+
+    try {
+      // Use pre-fetched URL from cache if available — but skip cache on retry
+      // since the cached URL may be expired (caused the error in the first place).
+      final cached = isRetry ? null : _streamUrlCache.remove(video.videoId);
+      final streamUrl = cached ??
+          await ref
+              .read(youtubeServiceProvider)
+              .getBestStreamUrl(video.videoId);
+      if (streamUrl == null) throw Exception('No playable stream found.');
+      await _player.open(Media(streamUrl));
+    } catch (e) {
+      _update((s) => s.copyWith(
+            status: PlayerStatus.error,
+            errorMessage: e.toString(),
+          ));
+    }
   }
 
   Future<void> playEntry(QueueEntry entry) async {
@@ -134,11 +306,39 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
     if (_isAdvancing || _disposed) return;
     _isAdvancing = true;
     try {
-      final queue = await ref.read(queueRepositoryProvider).getActive();
-      // Exclude the just-finished/skipped entry in case the DB update hasn't
-      // propagated yet (belt-and-suspenders).
-      final next = queue.where((e) => e.id != doneEntryId).firstOrNull;
+      // Pop the front of the unified ordered queue (preserves insertion order
+      // across both local and YouTube items).
+      while (_orderedQueue.isNotEmpty) {
+        final next = _orderedQueue.removeAt(0);
+        _update(
+            (s) => s.copyWith(unifiedQueue: List.unmodifiable(_orderedQueue)));
 
+        if (next.isYoutube && next.youtubeVideo != null) {
+          // Keep _isAdvancing = true — playYoutube's _player.stop() must not
+          // trigger _onTrackCompleted. The finally block releases it after
+          // playYoutube returns.
+          await playYoutube(next.youtubeVideo!);
+          return;
+        } else if (!next.isYoutube && next.dbEntryId != null) {
+          // Local song — look it up from DB.
+          final queue = await ref.read(queueRepositoryProvider).getActive();
+          final entry = queue
+              .where((e) => e.id == next.dbEntryId && e.id != doneEntryId)
+              .firstOrNull;
+          if (entry != null) {
+            await playEntry(entry);
+            await ref.read(queueNotifierProvider.notifier).refresh();
+            return;
+          }
+          // Entry was already done/removed — skip to next in order.
+          continue;
+        }
+      }
+
+      // Ordered queue exhausted — fall back to any remaining DB entries
+      // (e.g. songs queued before this session or by external means).
+      final queue = await ref.read(queueRepositoryProvider).getActive();
+      final next = queue.where((e) => e.id != doneEntryId).firstOrNull;
       if (next != null) {
         await playEntry(next);
       } else {
@@ -174,7 +374,10 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
     if (current.id != null) {
       await ref.read(queueRepositoryProvider).markDone(current.id!);
     }
-    await ref.read(songRepositoryProvider).incrementPlayCount(current.songId);
+    // Only update play count for real local songs (YouTube entries have songId = -1).
+    if (current.songId != -1) {
+      await ref.read(songRepositoryProvider).incrementPlayCount(current.songId);
+    }
     await _advanceQueue(doneEntryId: current.id);
   }
 

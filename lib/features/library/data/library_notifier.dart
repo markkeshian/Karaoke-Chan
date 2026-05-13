@@ -146,10 +146,17 @@ class LibraryNotifier extends AsyncNotifier<LibraryState> {
 
   Future<void> changeFolder() async {
     final manager = ref.read(folderManagerProvider);
+
+    // Pick the new folder BEFORE clearing anything — if the user cancels,
+    // the current folder stays intact and nothing changes.
+    final newPath = await manager.pickFolder();
+    if (newPath == null) return; // user cancelled — keep current folder
+
     await manager.clearFolder();
     _watcherSub?.cancel();
     _update((s) => const LibraryState());
-    await pickFolder();
+    _update((s) => s.copyWith(folderPath: newPath, status: ScanStatus.idle));
+    await scanFolder();
   }
 
   /// Full app reset: stops the player, wipes the queue, clears all songs,
