@@ -22,6 +22,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gap/gap.dart';
 import 'package:go_router/go_router.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:path/path.dart' as p;
 
 import 'package:karaoke_chan/core/router/app_router.dart';
 import 'package:karaoke_chan/features/library/data/library_notifier.dart';
@@ -145,12 +146,11 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
                     cursor: SystemMouseCursors.resizeColumn,
                     child: GestureDetector(
                       onHorizontalDragUpdate: (d) {
+                        final screenW = MediaQuery.sizeOf(context).width;
                         setState(() {
-                          _sidebarWidth = ((_sidebarWidth ??
-                                      MediaQuery.sizeOf(context).width * 0.35) +
-                                  d.delta.dx)
-                              .clamp(200.0,
-                                  MediaQuery.sizeOf(context).width * 0.65);
+                          _sidebarWidth =
+                              ((_sidebarWidth ?? screenW * 0.35) + d.delta.dx)
+                                  .clamp(220.0, screenW * 0.50);
                         });
                       },
                       child: Container(
@@ -178,34 +178,15 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
                           cursor: SystemMouseCursors.resizeRow,
                           child: GestureDetector(
                             onVerticalDragUpdate: (d) {
-                              final maxQueue =
-                                  MediaQuery.sizeOf(context).height * 0.40;
+                              final screenH = MediaQuery.sizeOf(context).height;
                               setState(() {
                                 _queueHeight = (_queueHeight - d.delta.dy)
-                                    .clamp(130.0, maxQueue);
+                                    .clamp(150.0, screenH * 0.55);
                               });
                             },
                             child: Container(
-                              height: 28,
+                              height: 4,
                               color: _border,
-                              child: const Center(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    SizedBox(
-                                      width: 40,
-                                      height: 4,
-                                      child: DecoratedBox(
-                                        decoration: BoxDecoration(
-                                          color: Colors.white30,
-                                          borderRadius: BorderRadius.all(
-                                              Radius.circular(2)),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
                             ),
                           ),
                         ),
@@ -267,7 +248,7 @@ class _FolderPickerView extends StatelessWidget {
                   ],
                 ),
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  Image.asset('assets/icons/logo-removebg-preview.png',
+                  Image.asset('assets/icons/applogo.png',
                       height: 80, width: 80),
                   const Gap(16),
                   const Text('Karaoke-Chan',
@@ -458,13 +439,13 @@ class _Sidebar extends ConsumerWidget {
                   children: [
                     Row(children: [
                       Image.asset(
-                        'assets/icons/logo-removebg-preview.png',
+                        'assets/icons/applogo.png',
                         height: 28,
                         width: 28,
                       ),
                       const SizedBox(width: 8),
                       const Expanded(
-                        child: Text('Karaoke Queue',
+                        child: Text('Karaoke-Chan',
                             style: TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.bold,
@@ -1047,6 +1028,9 @@ class _QueueItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final song = entry.song;
+    final displayName = song != null
+        ? p.basenameWithoutExtension(song.filePath)
+        : 'Song #${entry.songId}';
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -1054,7 +1038,7 @@ class _QueueItem extends StatelessWidget {
           color: _cardBg, borderRadius: BorderRadius.circular(12)),
       child: Row(children: [
         Expanded(
-          child: Text(song?.title ?? 'Song #${entry.songId}',
+          child: Text(displayName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
@@ -1062,16 +1046,6 @@ class _QueueItem extends StatelessWidget {
                   fontWeight: FontWeight.w500,
                   fontSize: 14)),
         ),
-        if (song?.artist != null || song?.folderName != null)
-          Padding(
-            padding: const EdgeInsets.only(left: 8),
-            child: Text(song!.artist ?? song.folderName ?? '',
-                style: const TextStyle(color: _sub, fontSize: 12)),
-          ),
-        const Gap(12),
-        Text('#$position',
-            style: const TextStyle(
-                color: _sub, fontWeight: FontWeight.bold, fontSize: 14)),
         const Gap(8),
         GestureDetector(
           onTap: onRemove,
