@@ -1,18 +1,5 @@
 // lib/features/home/presentation/karaoke_stage.dart
-//
-// Layout matches the HTML mockup:
-//  ┌──────────────┬──────────────────────────────────┐
-//  │  SIDEBAR 35% │  VIDEO AREA (flex)     [⛶]       │
-//  │  🎤 title    │                                   │
-//  │  [search]    │  video / audio placeholder        │
-//  │  song list   │  ┌─NOW PLAYING──────────────────┐ │
-//  │  [QUEUE btn] │  │ title · artist  ⏯ ⏭         │ │
-//  │              │  │ UP NEXT: …                   │ │
-//  │              │  └──────────────────────────────┘ │
-//  │              ├──────────────────────────────────┤
-//  │              │  QUEUE PANEL (220px)              │
-//  └──────────────┴──────────────────────────────────┘
-//  Fullscreen → sidebar + queue panel hidden, video fills screen.
+// Main screen: sidebar (search + song list) + video area + queue panel.
 
 import 'dart:async';
 import 'dart:io';
@@ -35,7 +22,7 @@ import 'package:karaoke_chan/features/queue/data/queue_notifier.dart';
 // ── Search mode ──────────────────────────────────────────────────────────────
 enum SearchMode { local, online }
 
-// ── Design tokens (match HTML) ───────────────────────────────────────────────
+// ── Design tokens ────────────────────────────────────────────────────────────
 const _bg = Color(0xFF111827);
 const _sidebarBg = Color(0xFF1F2937);
 const _border = Color(0xFF374151);
@@ -45,8 +32,6 @@ const _queueGreen = Color(0xFF22C55E);
 const _sub = Color(0xFFCBD5E1);
 const _overlayBg = Color(0xB3000000);
 const _purple = Color(0xFFE040FB);
-
-// ─────────────────────────────────────────────────────────────────────────────
 
 class KaraokeStage extends ConsumerStatefulWidget {
   const KaraokeStage({super.key});
@@ -1546,8 +1531,7 @@ class _VideoAreaState extends ConsumerState<_VideoArea> {
   @override
   void initState() {
     super.initState();
-    // Start the hide timer immediately so the overlay fades out on first load
-    // even if the cursor never enters.
+    // Start hide timer on load so overlay fades out without needing cursor movement.
     _startHideTimer();
   }
 
@@ -1578,10 +1562,7 @@ class _VideoAreaState extends ConsumerState<_VideoArea> {
     final player = widget.player;
     final queue = widget.queue;
 
-    // Listener works at a lower level than MouseRegion and receives pointer
-    // events even when a platform view (Video) is present underneath.
-    // On Android, the Video platform view absorbs touch events, so we add an
-    // explicit transparent GestureDetector overlay for Android.
+    // Use Listener for broad pointer coverage; Android needs overlay for touch on the video platform view.
     return Listener(
       onPointerHover: (_) => _onCursorActivity(),
       onPointerDown: (_) => _onCursorActivity(),
@@ -1686,13 +1667,7 @@ class _VideoAreaState extends ConsumerState<_VideoArea> {
                 ),
               ),
 
-            // On Android, the Video platform view absorbs all touch events so
-            // the top-level Listener never fires for taps on the video itself.
-            // Use a Positioned.fill transparent overlay to keep cursor-activity
-            // detection working.  When the overlay is hidden we use an opaque
-            // GestureDetector (first tap = show controls only, handled below in
-            // the fullscreen-button logic).  When visible we use a Listener so
-            // we don't enter the gesture arena and block child tap recognizers.
+            // Android: transparent overlay to capture touch events absorbed by the video platform view.
             if (Platform.isAndroid)
               Positioned.fill(
                 child: _overlayVisible
@@ -1706,10 +1681,7 @@ class _VideoAreaState extends ConsumerState<_VideoArea> {
                       ),
               ),
 
-            // ── Now-playing bar (bottom) ──────────────────────────────
-            // Positioned directly in the Stack so it always fills the full
-            // width.  IgnorePointer + AnimatedOpacity are applied INSIDE the
-            // Positioned child so they never become invalid ParentDataWidgets.
+            // Now-playing bar at the bottom of the video area.
             Positioned(
               bottom: 0,
               left: 0,
@@ -1724,10 +1696,7 @@ class _VideoAreaState extends ConsumerState<_VideoArea> {
               ),
             ),
 
-            // ── Fullscreen toggle (top-right) ─────────────────────────
-            // Lives as its own Positioned in the Stack, completely separate
-            // from IgnorePointer, so it is always hittable.  On first tap when
-            // controls are hidden, show controls; on subsequent tap, toggle.
+            // Fullscreen toggle button (top-right); first tap shows controls, second toggles.
             Positioned(
               top: 20,
               right: 20,
