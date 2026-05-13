@@ -287,7 +287,26 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
 
   Future<void> setVolume(double volume) async {
     await _player.setVolume(volume * 100);
-    _update((s) => s.copyWith(volume: volume));
+    _update((s) => s.copyWith(
+          volume: volume,
+          // Track the last non-zero volume so we can restore it on unmute.
+          lastVolume: volume > 0 ? volume : s.lastVolume,
+        ));
+  }
+
+  Future<void> toggleMute() async {
+    final s = state.value;
+    if (s == null) return;
+    if (s.volume > 0) {
+      // Mute — remember current volume and set to 0.
+      await _player.setVolume(0);
+      _update((st) => st.copyWith(volume: 0, lastVolume: s.volume));
+    } else {
+      // Unmute — restore last known volume (at least 0.1).
+      final restore = s.lastVolume > 0 ? s.lastVolume : 1.0;
+      await _player.setVolume(restore * 100);
+      _update((st) => st.copyWith(volume: restore));
+    }
   }
 
   Future<void> skip() async {

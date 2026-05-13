@@ -31,6 +31,7 @@ class KaraokePlayerState {
     this.position = Duration.zero,
     this.duration = Duration.zero,
     this.volume = 1.0,
+    this.lastVolume = 1.0,
     this.errorMessage,
     this.hasVideo = false,
     List<UnifiedQueueItem>? unifiedQueue,
@@ -41,6 +42,9 @@ class KaraokePlayerState {
   final Duration position;
   final Duration duration;
   final double volume;
+
+  /// The last non-zero volume — used to restore when unmuting.
+  final double lastVolume;
   final String? errorMessage;
   final bool hasVideo;
 
@@ -68,6 +72,7 @@ class KaraokePlayerState {
     Duration? position,
     Duration? duration,
     double? volume,
+    double? lastVolume,
     String? errorMessage,
     bool? hasVideo,
     List<UnifiedQueueItem>? unifiedQueue,
@@ -80,6 +85,7 @@ class KaraokePlayerState {
       position: position ?? this.position,
       duration: duration ?? this.duration,
       volume: volume ?? this.volume,
+      lastVolume: lastVolume ?? this.lastVolume,
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       hasVideo: hasVideo ?? this.hasVideo,
       unifiedQueue: unifiedQueue ?? this.unifiedQueue,

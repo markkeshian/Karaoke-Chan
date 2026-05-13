@@ -15,6 +15,7 @@
 //  Fullscreen → sidebar + queue panel hidden, video fills screen.
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -81,17 +82,30 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
     super.dispose();
   }
 
+  void _setFullscreen(bool value) {
+    debugPrint(
+        '[Fullscreen] _setFullscreen called: value=$value, current=$_fullscreen');
+    setState(() => _fullscreen = value);
+    debugPrint('[Fullscreen] setState done: _fullscreen=$_fullscreen');
+  }
+
+  void _toggleFullscreen() {
+    debugPrint(
+        '[Fullscreen] _toggleFullscreen called: current=$_fullscreen -> next=${!_fullscreen}');
+    _setFullscreen(!_fullscreen);
+  }
+
   bool _handleKey(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
     // Don't steal keyboard shortcuts while the search bar is focused.
     if (_searchFocusNode.hasFocus) return false;
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.keyF || key == LogicalKeyboardKey.f11) {
-      setState(() => _fullscreen = !_fullscreen);
+      _toggleFullscreen();
       return true;
     }
     if (key == LogicalKeyboardKey.escape && _fullscreen) {
-      setState(() => _fullscreen = false);
+      _setFullscreen(false);
       return true;
     }
     if (key == LogicalKeyboardKey.space ||
@@ -211,8 +225,30 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
                       });
                     },
                     child: Container(
-                      width: 6,
+                      width: Platform.isAndroid ? 18 : 6,
                       color: _border,
+                      child: Platform.isAndroid
+                          ? Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: List.generate(
+                                  4,
+                                  (_) => Padding(
+                                    padding:
+                                        const EdgeInsets.symmetric(vertical: 2),
+                                    child: Container(
+                                      width: 4,
+                                      height: 4,
+                                      decoration: const BoxDecoration(
+                                        color: Color(0xFF9CA3AF),
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            )
+                          : null,
                     ),
                   ),
                 ),
@@ -225,8 +261,7 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
                         player: player,
                         queue: queue,
                         fullscreen: _fullscreen,
-                        onToggle: () =>
-                            setState(() => _fullscreen = !_fullscreen),
+                        onToggle: () => _toggleFullscreen(),
                       ),
                     ),
                     if (!_fullscreen) ...[
@@ -242,8 +277,31 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
                             });
                           },
                           child: Container(
-                            height: 4,
+                            height: Platform.isAndroid ? 18 : 4,
                             color: _border,
+                            child: Platform.isAndroid
+                                ? Center(
+                                    child: Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: List.generate(
+                                        4,
+                                        (_) => Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 2),
+                                          child: Container(
+                                            width: 4,
+                                            height: 4,
+                                            decoration: const BoxDecoration(
+                                              color: Color(0xFF9CA3AF),
+                                              shape: BoxShape.circle,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  )
+                                : null,
                           ),
                         ),
                       ),
@@ -1321,6 +1379,8 @@ class _VideoAreaState extends ConsumerState<_VideoArea> {
   }
 
   void _onCursorActivity() {
+    debugPrint(
+        '[Fullscreen] _onCursorActivity: overlayVisible=$_overlayVisible');
     if (!_overlayVisible) setState(() => _overlayVisible = true);
     _startHideTimer();
   }
@@ -1334,6 +1394,8 @@ class _VideoAreaState extends ConsumerState<_VideoArea> {
 
     // Listener works at a lower level than MouseRegion and receives pointer
     // events even when a platform view (Video) is present underneath.
+    // On Android, the Video platform view absorbs touch events, so we add an
+    // explicit transparent GestureDetector overlay for Android.
     return Listener(
       onPointerHover: (_) => _onCursorActivity(),
       onPointerDown: (_) => _onCursorActivity(),
@@ -1438,40 +1500,80 @@ class _VideoAreaState extends ConsumerState<_VideoArea> {
                 ),
               ),
 
-            // Controls fade in/out on cursor idle
-            AnimatedOpacity(
-              opacity: _overlayVisible ? 1.0 : 0.0,
-              duration: const Duration(milliseconds: 400),
-              child: Stack(children: [
-                // Fullscreen toggle (top-right)
-                Positioned(
-                  top: 20,
-                  right: 20,
-                  child: GestureDetector(
-                    onTap: widget.onToggle,
-                    child: Container(
-                      width: 48,
-                      height: 48,
-                      decoration: const BoxDecoration(
-                          color: _overlayBg, shape: BoxShape.circle),
-                      child: Icon(
-                          widget.fullscreen
-                              ? Icons.fullscreen_exit
-                              : Icons.fullscreen,
-                          color: Colors.white,
-                          size: 24),
+            // On Android, the Video platform view absorbs all touch events so
+            // the top-level Listener never fires for taps on the video itself.
+            // Use a Positioned.fill transparent overlay to keep cursor-activity
+            // detection working.  When the overlay is hidden we use an opaque
+            // GestureDetector (first tap = show controls only, handled below in
+            // the fullscreen-button logic).  When visible we use a Listener so
+            // we don't enter the gesture arena and block child tap recognizers.
+            if (Platform.isAndroid)
+              Positioned.fill(
+                child: _overlayVisible
+                    ? Listener(
+                        behavior: HitTestBehavior.translucent,
+                        onPointerDown: (_) => _onCursorActivity(),
+                      )
+                    : GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _onCursorActivity,
+                      ),
+              ),
+
+            // ── Now-playing bar (bottom) ──────────────────────────────
+            // Positioned directly in the Stack so it always fills the full
+            // width.  IgnorePointer + AnimatedOpacity are applied INSIDE the
+            // Positioned child so they never become invalid ParentDataWidgets.
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: IgnorePointer(
+                ignoring: !_overlayVisible,
+                child: AnimatedOpacity(
+                  opacity: _overlayVisible ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 400),
+                  child: _NowPlayingOverlay(player: player, queue: queue),
+                ),
+              ),
+            ),
+
+            // ── Fullscreen toggle (top-right) ─────────────────────────
+            // Lives as its own Positioned in the Stack, completely separate
+            // from IgnorePointer, so it is always hittable.  On first tap when
+            // controls are hidden, show controls; on subsequent tap, toggle.
+            Positioned(
+              top: 20,
+              right: 20,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  debugPrint(
+                      '[Fullscreen] button tapped: fullscreen=${widget.fullscreen}, overlayVisible=$_overlayVisible');
+                  if (!_overlayVisible) {
+                    _onCursorActivity();
+                  } else {
+                    widget.onToggle();
+                  }
+                },
+                child: AnimatedOpacity(
+                  opacity: _overlayVisible ? 1.0 : 0.3,
+                  duration: const Duration(milliseconds: 400),
+                  child: Container(
+                    width: 48,
+                    height: 48,
+                    decoration: const BoxDecoration(
+                        color: _overlayBg, shape: BoxShape.circle),
+                    child: Icon(
+                      widget.fullscreen
+                          ? Icons.fullscreen_exit
+                          : Icons.fullscreen,
+                      color: Colors.white,
+                      size: 24,
                     ),
                   ),
                 ),
-
-                // Full-width bottom bar
-                Positioned(
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  child: _NowPlayingOverlay(player: player, queue: queue),
-                ),
-              ]),
+              ),
             ),
           ]),
         ),
@@ -1639,6 +1741,51 @@ class _NowPlayingOverlay extends ConsumerWidget {
                           const TextStyle(color: Colors.white54, fontSize: 11)),
                 ],
               ),
+            ),
+            const Gap(8),
+            // ── Volume ──────────────────────────────────────────────
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                GestureDetector(
+                  onTap: () => notifier.toggleMute(),
+                  child: Icon(
+                    player.volume == 0
+                        ? Icons.volume_off
+                        : player.volume < 0.5
+                            ? Icons.volume_down
+                            : Icons.volume_up,
+                    color:
+                        player.volume == 0 ? Colors.redAccent : Colors.white54,
+                    size: 18,
+                  ),
+                ),
+                const Gap(4),
+                SizedBox(
+                  width: 100,
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 2,
+                      thumbShape:
+                          const RoundSliderThumbShape(enabledThumbRadius: 4),
+                      overlayShape:
+                          const RoundSliderOverlayShape(overlayRadius: 8),
+                      activeTrackColor: Colors.white70,
+                      inactiveTrackColor: Colors.white24,
+                      thumbColor: Colors.white,
+                    ),
+                    child: Slider(
+                      value: player.volume.clamp(0.0, 1.0),
+                      onChanged: (v) => notifier.setVolume(v),
+                    ),
+                  ),
+                ),
+                const Gap(4),
+                Text(
+                  '${(player.volume * 100).round()}%',
+                  style: const TextStyle(color: Colors.white54, fontSize: 11),
+                ),
+              ],
             ),
           ],
         ],

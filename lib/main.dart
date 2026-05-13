@@ -16,12 +16,14 @@ import 'package:karaoke_chan/features/queue/data/queue_repository.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Force landscape on Android
+  // Force landscape on Android and enter persistent immersive mode so the
+  // system bars are always hidden (karaoke display — no need for status/nav bar).
   if (!kIsWeb && Platform.isAndroid) {
     await SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   }
 
   // Initialize media_kit
@@ -44,12 +46,14 @@ class KaraokeApp extends ConsumerStatefulWidget {
   ConsumerState<KaraokeApp> createState() => _KaraokeAppState();
 }
 
-class _KaraokeAppState extends ConsumerState<KaraokeApp> {
+class _KaraokeAppState extends ConsumerState<KaraokeApp>
+    with WidgetsBindingObserver {
   late final AppLifecycleListener _lifecycleListener;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _lifecycleListener = AppLifecycleListener(
       // Fires on macOS/Windows when the last window is closed.
       onExitRequested: () async {
@@ -59,6 +63,15 @@ class _KaraokeAppState extends ConsumerState<KaraokeApp> {
       // Fires when the app is being detached (process ending).
       onDetach: () => _clearSessionData(),
     );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Android can reset immersive mode when the app is backgrounded/resumed.
+    // Re-apply it each time we come back to the foreground.
+    if (state == AppLifecycleState.resumed && Platform.isAndroid) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    }
   }
 
   Future<void> _clearSessionData() async {
@@ -73,6 +86,7 @@ class _KaraokeAppState extends ConsumerState<KaraokeApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _lifecycleListener.dispose();
     super.dispose();
   }
