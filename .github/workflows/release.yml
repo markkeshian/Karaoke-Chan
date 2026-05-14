@@ -58,10 +58,11 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Set up Visual Studio
+        uses: microsoft/setup-msbuild@v2
+
       - name: Build Windows
         run: flutter build windows --release
-        env:
-          CMAKE_GENERATOR: "Visual Studio 17 2022"
 
       - name: Zip Windows build
         run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath karaoke-chan-windows.zip
