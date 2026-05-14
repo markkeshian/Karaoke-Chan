@@ -45,13 +45,18 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
   final _focusNode = FocusNode();
   final _searchFocusNode = FocusNode();
   bool _fullscreen = false;
-  bool _isChangingFolder = false;
   bool _showSettings = false;
   double? _sidebarWidth;
   double _queueHeight = 220;
   SearchMode _searchMode = SearchMode.local;
   bool _karaokeMode = true;
   Timer? _ytDebounce;
+
+  // Narrow-layout tab: 0 = Songs, 1 = Now Playing / Queue
+  int _activeTab = 0;
+
+  // Breakpoint: below this width the layout switches to stacked (phone) mode.
+  static const double _narrowBreak = 600;
 
   @override
   void initState() {
@@ -125,17 +130,6 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
             child: Text('Error: $e',
                 style: const TextStyle(color: Colors.white70))),
         data: (library) {
-          if (!library.hasFolder || _isChangingFolder) {
-            return _FolderPickerView(
-              onPick: () async {
-                await ref.read(libraryProvider.notifier).pickFolder();
-                if (mounted) setState(() => _isChangingFolder = false);
-              },
-              onCancel: library.hasFolder
-                  ? () => setState(() => _isChangingFolder = false)
-                  : null,
-            );
-          }
           if (library.isScanning) {
             return _ScanningView(library: library);
           }
@@ -149,166 +143,189 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
           final player = playerAsync.valueOrNull ?? const KaraokePlayerState();
           final queue = queueAsync.valueOrNull ?? [];
 
-          return Row(
-            children: [
-              if (!_fullscreen) ...[
-                _Sidebar(
-                  library: library,
-                  searchCtrl: _search,
-                  searchFocusNode: _searchFocusNode,
-                  sidebarWidth:
-                      _sidebarWidth ?? MediaQuery.sizeOf(context).width * 0.35,
-                  currentSongId: player.currentEntry?.songId,
-                  queuedSongIds: queue
-                      .where((e) =>
-                          e.status == QueueStatus.waiting ||
-                          e.status == QueueStatus.playing)
-                      .map((e) => e.songId)
-                      .toSet(),
-                  onQueue: (s) => _queueSong(s, player),
-                  onChangeFolder: () =>
-                      setState(() => _isChangingFolder = true),
-                  searchMode: _searchMode,
-                  karaokeMode: _karaokeMode,
-                  onKaraokeModeChanged: (val) {
-                    setState(() {
-                      _karaokeMode = val;
-                      // Re-run the current YouTube query with the updated suffix.
-                      final q = _search.text;
-                      if (_searchMode == SearchMode.online && q.isNotEmpty) {
-                        _ytDebounce?.cancel();
-                        final effectiveQ = val ? '$q karaoke' : q;
-                        ref
-                            .read(youtubeSearchProvider.notifier)
-                            .search(effectiveQ);
-                      }
-                    });
-                  },
-                  onSearchModeChanged: (mode) {
-                    setState(() {
-                      _searchMode = mode;
-                      _ytDebounce?.cancel();
-                      // Re-run the current query in the new mode without clearing the text.
-                      final q = _search.text;
-                      if (mode == SearchMode.local) {
-                        ref.read(youtubeSearchProvider.notifier).clear();
-                        ref.read(libraryProvider.notifier).search(q);
-                      } else {
-                        ref.read(libraryProvider.notifier).search('');
-                        if (q.isNotEmpty) {
-                          final effectiveQ = _karaokeMode ? '$q karaoke' : q;
-                          ref
-                              .read(youtubeSearchProvider.notifier)
-                              .search(effectiveQ);
-                        } else {
-                          ref.read(youtubeSearchProvider.notifier).clear();
-                        }
-                      }
-                    });
-                  },
-                  onYoutubeSearch: (q) {
-                    _ytDebounce?.cancel();
-                    _ytDebounce = Timer(const Duration(milliseconds: 600), () {
-                      final effectiveQ = _karaokeMode ? '$q karaoke' : q;
-                      ref
-                          .read(youtubeSearchProvider.notifier)
-                          .search(effectiveQ);
-                    });
-                  },
-                  onYoutubePlay: (video) => _queueYoutube(video, player),
-                  showSettings: _showSettings,
-                  onToggleSettings: () =>
-                      setState(() => _showSettings = !_showSettings),
-                ),
-                // ── Sidebar drag resizer ──────────────────────────────
-                MouseRegion(
-                  cursor: SystemMouseCursors.resizeColumn,
-                  child: GestureDetector(
-                    onHorizontalDragUpdate: (d) {
-                      final screenW = MediaQuery.sizeOf(context).width;
-                      setState(() {
-                        _sidebarWidth =
-                            ((_sidebarWidth ?? screenW * 0.35) + d.delta.dx)
-                                .clamp(220.0, screenW * 0.50);
-                      });
-                    },
-                    child: Container(
-                      width: Platform.isAndroid ? 18 : 6,
-                      color: _border,
-                      child: Platform.isAndroid
-                          ? Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: List.generate(
-                                  4,
-                                  (_) => Padding(
-                                    padding:
-                                        const EdgeInsets.symmetric(vertical: 2),
-                                    child: Container(
-                                      width: 4,
-                                      height: 4,
-                                      decoration: const BoxDecoration(
-                                        color: Color(0xFF9CA3AF),
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
-                                  ),
-                                ),
+          return LayoutBuilder(builder: (context, constraints) {
+            final isNarrow = constraints.maxWidth < _narrowBreak;
+
+            // ── NARROW (phone): stacked tab layout ────────────────────
+            if (isNarrow && !_fullscreen) {
+              return Column(
+                children: [
+                  // Tab bar at the top
+                  _NarrowTabBar(
+                    activeTab: _activeTab,
+                    onTab: (i) => setState(() => _activeTab = i),
+                    isPlaying: !player.isIdle,
+                  ),
+                  Expanded(
+                    child: IndexedStack(
+                      index: _activeTab,
+                      children: [
+                        // ── Tab 0: Song search ───────────────────────
+                        _Sidebar(
+                          library: library,
+                          searchCtrl: _search,
+                          searchFocusNode: _searchFocusNode,
+                          sidebarWidth: constraints.maxWidth,
+                          currentSongId: player.currentEntry?.songId,
+                          queuedSongIds: queue
+                              .where((e) =>
+                                  e.status == QueueStatus.waiting ||
+                                  e.status == QueueStatus.playing)
+                              .map((e) => e.songId)
+                              .toSet(),
+                          onQueue: (s) {
+                            _queueSong(s, player);
+                            // Jump to player tab so user sees it queued
+                            setState(() => _activeTab = 1);
+                          },
+                          onChangeFolder: () =>
+                              ref.read(libraryProvider.notifier).changeFolder(),
+                          searchMode: _searchMode,
+                          karaokeMode: _karaokeMode,
+                          onKaraokeModeChanged: (val) =>
+                              _onKaraokeModeChanged(val),
+                          onSearchModeChanged: (mode) =>
+                              _onSearchModeChanged(mode),
+                          onYoutubeSearch: (q) => _onYoutubeSearch(q),
+                          onYoutubePlay: (video) {
+                            _queueYoutube(video, player);
+                            setState(() => _activeTab = 1);
+                          },
+                          showSettings: _showSettings,
+                          onToggleSettings: () =>
+                              setState(() => _showSettings = !_showSettings),
+                        ),
+                        // ── Tab 1: Player + Queue ────────────────────
+                        Column(
+                          children: [
+                            Expanded(
+                              child: _VideoArea(
+                                player: player,
+                                queue: queue,
+                                fullscreen: false,
+                                onToggle: () => _toggleFullscreen(),
                               ),
-                            )
-                          : null,
+                            ),
+                            const _PlayerControlBar(),
+                            _QueuePanel(
+                              queue: queue,
+                              height: (constraints.maxHeight * 0.35)
+                                  .clamp(160.0, 320.0),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
-                ),
-              ],
-              Expanded(
-                child: Column(
-                  children: [
-                    Expanded(
-                      child: _VideoArea(
-                        player: player,
-                        queue: queue,
-                        fullscreen: _fullscreen,
-                        onToggle: () => _toggleFullscreen(),
+                ],
+              );
+            }
+
+            // ── WIDE (tablet / desktop): side-by-side layout ──────────
+            final defaultSidebarW =
+                (constraints.maxWidth * 0.32).clamp(260.0, 420.0);
+            final sidebarW =
+                _sidebarWidth?.clamp(260.0, constraints.maxWidth * 0.50) ??
+                    defaultSidebarW;
+            final queueH = _queueHeight.clamp(160.0,
+                (constraints.maxHeight * 0.55).clamp(160.0, double.infinity));
+
+            return Row(
+              children: [
+                if (!_fullscreen) ...[
+                  _Sidebar(
+                    library: library,
+                    searchCtrl: _search,
+                    searchFocusNode: _searchFocusNode,
+                    sidebarWidth: sidebarW,
+                    currentSongId: player.currentEntry?.songId,
+                    queuedSongIds: queue
+                        .where((e) =>
+                            e.status == QueueStatus.waiting ||
+                            e.status == QueueStatus.playing)
+                        .map((e) => e.songId)
+                        .toSet(),
+                    onQueue: (s) => _queueSong(s, player),
+                    onChangeFolder: () =>
+                        ref.read(libraryProvider.notifier).changeFolder(),
+                    searchMode: _searchMode,
+                    karaokeMode: _karaokeMode,
+                    onKaraokeModeChanged: (val) => _onKaraokeModeChanged(val),
+                    onSearchModeChanged: (mode) => _onSearchModeChanged(mode),
+                    onYoutubeSearch: (q) => _onYoutubeSearch(q),
+                    onYoutubePlay: (video) => _queueYoutube(video, player),
+                    showSettings: _showSettings,
+                    onToggleSettings: () =>
+                        setState(() => _showSettings = !_showSettings),
+                  ),
+                  // ── Sidebar drag resizer ────────────────────────────
+                  MouseRegion(
+                    cursor: SystemMouseCursors.resizeColumn,
+                    child: GestureDetector(
+                      onHorizontalDragUpdate: (d) {
+                        final screenW = constraints.maxWidth;
+                        setState(() {
+                          _sidebarWidth = ((sidebarW) + d.delta.dx)
+                              .clamp(260.0, screenW * 0.50);
+                        });
+                      },
+                      child: Container(
+                        width: 6,
+                        color: _border,
                       ),
                     ),
-                    if (!_fullscreen) ...[
-                      // ── Always-visible player control bar ──────────
-                      const _PlayerControlBar(),
-                      // ── Queue panel drag resizer ────────────────────
-                      MouseRegion(
-                        cursor: SystemMouseCursors.resizeRow,
-                        child: GestureDetector(
-                          onVerticalDragUpdate: (d) {
-                            final screenH = MediaQuery.sizeOf(context).height;
-                            setState(() {
-                              _queueHeight = (_queueHeight - d.delta.dy)
-                                  .clamp(150.0, screenH * 0.55);
-                            });
-                          },
-                          child: Container(
-                            height: 16,
-                            color: const Color(0xFF111827),
-                            child: Center(
-                              child: Container(
-                                width: 48,
-                                height: 4,
-                                decoration: BoxDecoration(
-                                  color: Colors.white24,
-                                  borderRadius: BorderRadius.circular(2),
+                  ),
+                ],
+                Expanded(
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: _VideoArea(
+                          player: player,
+                          queue: queue,
+                          fullscreen: _fullscreen,
+                          onToggle: () => _toggleFullscreen(),
+                        ),
+                      ),
+                      if (!_fullscreen) ...[
+                        const _PlayerControlBar(),
+                        // ── Queue panel drag resizer ──────────────────
+                        MouseRegion(
+                          cursor: SystemMouseCursors.resizeRow,
+                          child: GestureDetector(
+                            onVerticalDragUpdate: (d) {
+                              setState(() {
+                                _queueHeight = (_queueHeight - d.delta.dy)
+                                    .clamp(
+                                        160.0,
+                                        (constraints.maxHeight * 0.55)
+                                            .clamp(160.0, double.infinity));
+                              });
+                            },
+                            child: Container(
+                              height: 16,
+                              color: const Color(0xFF111827),
+                              child: Center(
+                                child: Container(
+                                  width: 48,
+                                  height: 4,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white24,
+                                    borderRadius: BorderRadius.circular(2),
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                      _QueuePanel(queue: queue, height: _queueHeight),
+                        _QueuePanel(queue: queue, height: queueH),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
-            ],
-          );
+              ],
+            );
+          });
         },
       ),
     );
@@ -331,6 +348,46 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
       ref.read(playerProvider.notifier).queueYoutube(video);
       _showQueuedSnackBar(video.title);
     }
+  }
+
+  void _onKaraokeModeChanged(bool val) {
+    setState(() {
+      _karaokeMode = val;
+      final q = _search.text;
+      if (_searchMode == SearchMode.online && q.isNotEmpty) {
+        _ytDebounce?.cancel();
+        final effectiveQ = val ? '$q karaoke' : q;
+        ref.read(youtubeSearchProvider.notifier).search(effectiveQ);
+      }
+    });
+  }
+
+  void _onSearchModeChanged(SearchMode mode) {
+    setState(() {
+      _searchMode = mode;
+      _ytDebounce?.cancel();
+      final q = _search.text;
+      if (mode == SearchMode.local) {
+        ref.read(youtubeSearchProvider.notifier).clear();
+        ref.read(libraryProvider.notifier).search(q);
+      } else {
+        ref.read(libraryProvider.notifier).search('');
+        if (q.isNotEmpty) {
+          final effectiveQ = _karaokeMode ? '$q karaoke' : q;
+          ref.read(youtubeSearchProvider.notifier).search(effectiveQ);
+        } else {
+          ref.read(youtubeSearchProvider.notifier).clear();
+        }
+      }
+    });
+  }
+
+  void _onYoutubeSearch(String q) {
+    _ytDebounce?.cancel();
+    _ytDebounce = Timer(const Duration(milliseconds: 600), () {
+      final effectiveQ = _karaokeMode ? '$q karaoke' : q;
+      ref.read(youtubeSearchProvider.notifier).search(effectiveQ);
+    });
   }
 
   void _showQueuedSnackBar(String title) {
@@ -382,244 +439,6 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
               ),
             ),
           ]),
-        ),
-      ),
-    );
-  }
-}
-
-// ── Folder picker ────────────────────────────────────────────────────────────
-
-class _FolderPickerView extends StatefulWidget {
-  const _FolderPickerView({required this.onPick, this.onCancel});
-  final VoidCallback onPick;
-  final VoidCallback? onCancel;
-
-  @override
-  State<_FolderPickerView> createState() => _FolderPickerViewState();
-}
-
-class _FolderPickerViewState extends State<_FolderPickerView>
-    with WidgetsBindingObserver {
-  // null = not yet checked
-  bool? _permPermanentlyDenied;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _checkPermission();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  // Re-check when app comes back from Settings
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _checkPermission();
-  }
-
-  Future<void> _checkPermission() async {
-    if (!Platform.isAndroid) {
-      if (mounted) setState(() => _permPermanentlyDenied = false);
-      return;
-    }
-    final v = await Permission.videos.status;
-    final a = await Permission.audio.status;
-    final s = await Permission.storage.status;
-    final denied = (v.isPermanentlyDenied || a.isPermanentlyDenied) &&
-        s.isPermanentlyDenied;
-    if (mounted) setState(() => _permPermanentlyDenied = denied);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final permDenied = _permPermanentlyDenied ?? false;
-
-    return Container(
-      color: const Color(0xFF0F172A),
-      child: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 420),
-                child: Container(
-                  padding: const EdgeInsets.all(40),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E293B),
-                    borderRadius: BorderRadius.circular(24),
-                    boxShadow: const [
-                      BoxShadow(
-                          color: Colors.black54,
-                          blurRadius: 30,
-                          offset: Offset(0, 10)),
-                    ],
-                  ),
-                  child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    Image.asset('assets/icons/applogo.png',
-                        height: 80, width: 80),
-                    const Gap(16),
-                    const Text('Karaoke-Chan',
-                        style: TextStyle(
-                            fontSize: 32,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white)),
-                    const Gap(16),
-                    if (permDenied) ...[
-                      // ── Permission permanently denied ─────────────────
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.red.withAlpha(30),
-                          borderRadius: BorderRadius.circular(12),
-                          border:
-                              Border.all(color: Colors.redAccent.withAlpha(80)),
-                        ),
-                        child: const Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Icon(Icons.lock_outline,
-                                color: Colors.redAccent, size: 22),
-                            Gap(10),
-                            Expanded(
-                              child: Text(
-                                'Storage permission was denied.\nKaraoke-Chan needs access to your files to find songs.',
-                                style: TextStyle(
-                                    color: Colors.redAccent,
-                                    fontSize: 14,
-                                    height: 1.5),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Gap(12),
-                      const Text(
-                        'Please open App Settings → Permissions → Files and Media → Allow.',
-                        textAlign: TextAlign.center,
-                        style:
-                            TextStyle(color: _sub, fontSize: 13, height: 1.6),
-                      ),
-                      const Gap(28),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: () async {
-                            await openAppSettings();
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.redAccent,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            textStyle: const TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.bold),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14)),
-                          ),
-                          icon: const Icon(Icons.settings_outlined),
-                          label: const Text('Open App Settings'),
-                        ),
-                      ),
-                      const Gap(12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: widget.onPick,
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: _sub,
-                            side: const BorderSide(color: _border),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14)),
-                          ),
-                          icon: const Icon(Icons.folder_open, size: 18),
-                          label: const Text('Try Again'),
-                        ),
-                      ),
-                    ] else ...[
-                      // ── Normal first-time or change folder ────────────
-                      const Text(
-                        'Select the folder where your karaoke songs are stored.',
-                        textAlign: TextAlign.center,
-                        style:
-                            TextStyle(color: _sub, fontSize: 15, height: 1.5),
-                      ),
-                      if (Platform.isAndroid) ...[
-                        const Gap(12),
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withAlpha(8),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: const Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Icon(Icons.info_outline,
-                                  color: Colors.white38, size: 18),
-                              Gap(8),
-                              Expanded(
-                                child: Text(
-                                  'Android will ask for storage permission. Tap "Allow" to let the app read your files.',
-                                  style: TextStyle(
-                                      color: Colors.white38,
-                                      fontSize: 12,
-                                      height: 1.5),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                      const Gap(28),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: widget.onPick,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _queueGreen,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            textStyle: const TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.bold),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14)),
-                          ),
-                          icon: const Icon(Icons.folder_open),
-                          label: const Text('📁  Select Karaoke Folder'),
-                        ),
-                      ),
-                    ],
-                    if (widget.onCancel != null) ...[
-                      const Gap(12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: TextButton(
-                          onPressed: widget.onCancel,
-                          style: TextButton.styleFrom(
-                            foregroundColor: Colors.white54,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                          ),
-                          child: const Text('Cancel',
-                              style: TextStyle(fontSize: 15)),
-                        ),
-                      ),
-                    ],
-                    const Gap(16),
-                    const Text(
-                        'Supports MP4 · MKV · AVI · MP3 · FLAC · and more',
-                        style: TextStyle(color: Colors.white30, fontSize: 12)),
-                  ]),
-                ),
-              ),
-            ),
-          ),
         ),
       ),
     );
@@ -836,13 +655,6 @@ class _Sidebar extends ConsumerWidget {
                         tooltip: showSettings ? 'Close Settings' : 'Settings',
                         onPressed: onToggleSettings,
                       ),
-                      if (!showSettings)
-                        IconButton(
-                          icon: const Icon(Icons.folder_open_outlined,
-                              color: Colors.white38, size: 18),
-                          tooltip: 'Change folder',
-                          onPressed: onChangeFolder,
-                        ),
                     ]),
                     if (!showSettings) ...[
                       const Gap(12),
@@ -952,21 +764,26 @@ class _Sidebar extends ConsumerWidget {
               Expanded(
                 child: searchMode == SearchMode.online
                     ? _OnlineResultsList(onPlay: onYoutubePlay)
-                    : library.songs.isEmpty
-                        ? const Center(
-                            child: Text('No songs found',
-                                style: TextStyle(color: Colors.white38)))
-                        : ListView.builder(
-                            padding: const EdgeInsets.fromLTRB(15, 15, 15, 64),
-                            itemCount: library.songs.length,
-                            itemBuilder: (_, i) => _SongItem(
-                              song: library.songs[i],
-                              isCurrent: library.songs[i].id == currentSongId,
-                              isQueued: library.songs[i].id != null &&
-                                  queuedSongIds.contains(library.songs[i].id),
-                              onQueue: () => onQueue(library.songs[i]),
-                            ),
-                          ),
+                    : !library.hasFolder
+                        ? _NoFolderPrompt(onPick: onChangeFolder)
+                        : library.songs.isEmpty
+                            ? const Center(
+                                child: Text('No songs found',
+                                    style: TextStyle(color: Colors.white38)))
+                            : ListView.builder(
+                                padding:
+                                    const EdgeInsets.fromLTRB(15, 15, 15, 64),
+                                itemCount: library.songs.length,
+                                itemBuilder: (_, i) => _SongItem(
+                                  song: library.songs[i],
+                                  isCurrent:
+                                      library.songs[i].id == currentSongId,
+                                  isQueued: library.songs[i].id != null &&
+                                      queuedSongIds
+                                          .contains(library.songs[i].id),
+                                  onQueue: () => onQueue(library.songs[i]),
+                                ),
+                              ),
               ),
           ]),
         ),
@@ -1002,14 +819,6 @@ class _SidebarSettingsPanel extends ConsumerWidget {
             ref.read(libraryProvider.notifier).changeFolder();
           },
         ),
-        const Gap(6),
-        _SettingsItem(
-          icon: Icons.restart_alt,
-          iconColor: Colors.orangeAccent,
-          title: 'Restart App',
-          subtitle: 'Clear all cache and return to folder selection',
-          onTap: () => _confirmRestart(context, ref),
-        ),
         const Gap(20),
 
         // ── Queue ────────────────────────────────────────────────────────
@@ -1021,6 +830,18 @@ class _SidebarSettingsPanel extends ConsumerWidget {
           title: 'Clear Queue',
           subtitle: 'Remove all waiting entries',
           onTap: () => _confirmClearQueue(context, ref),
+        ),
+        const Gap(20),
+
+        // ── Danger zone ──────────────────────────────────────────────────
+        const _SettingsSectionLabel(label: 'Danger Zone'),
+        const Gap(8),
+        _SettingsItem(
+          icon: Icons.delete_sweep_outlined,
+          iconColor: Colors.redAccent,
+          title: 'Clear All Data',
+          subtitle: 'Remove all songs, queue entries, and saved folder',
+          onTap: () => _confirmClearAll(context, ref),
         ),
         const Gap(20),
 
@@ -1066,15 +887,15 @@ class _SidebarSettingsPanel extends ConsumerWidget {
     );
   }
 
-  void _confirmRestart(BuildContext context, WidgetRef ref) {
+  void _confirmClearAll(BuildContext context, WidgetRef ref) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: _cardBg,
-        title:
-            const Text('Restart App?', style: TextStyle(color: Colors.white)),
+        title: const Text('Clear All Data?',
+            style: TextStyle(color: Colors.white)),
         content: const Text(
-          'This will clear all queue entries, remove the saved folder, and return you to folder selection.',
+          'This will stop playback, clear the queue, remove all scanned songs, and forget the saved folder. This cannot be undone.',
           style: TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -1088,7 +909,7 @@ class _SidebarSettingsPanel extends ConsumerWidget {
               Navigator.of(ctx).pop();
               await ref.read(libraryProvider.notifier).resetToStart();
             },
-            child: const Text('Restart',
+            child: const Text('Clear All',
                 style: TextStyle(
                     color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
           ),
@@ -2106,188 +1927,266 @@ class _PlayerControlBar extends ConsumerWidget {
     final notifier = ref.read(playerProvider.notifier);
     final song = player.currentEntry?.song;
 
-    return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xFF1A2235),
-        border: Border(
-          top: BorderSide(color: _border, width: 1),
-          bottom: BorderSide(color: _border, width: 1),
+    return LayoutBuilder(builder: (context, constraints) {
+      final isNarrow = constraints.maxWidth < 420;
+
+      return Container(
+        decoration: const BoxDecoration(
+          color: Color(0xFF1A2235),
+          border: Border(
+            top: BorderSide(color: _border, width: 1),
+            bottom: BorderSide(color: _border, width: 1),
+          ),
         ),
-      ),
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // ── Progress bar row ───────────────────────────────────────
-          Row(
-            children: [
-              Text(
-                _fmt(player.position),
-                style: const TextStyle(color: Colors.white54, fontSize: 11),
-              ),
-              Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 3,
-                    thumbShape:
-                        const RoundSliderThumbShape(enabledThumbRadius: 5),
-                    overlayShape:
-                        const RoundSliderOverlayShape(overlayRadius: 12),
-                    activeTrackColor: _purple,
-                    inactiveTrackColor: Colors.white24,
-                    thumbColor: _purple,
-                  ),
-                  child: Slider(
-                    value: player.progressFraction,
-                    onChanged: (v) {
-                      if (player.duration > Duration.zero) {
-                        notifier.seek(player.duration * v);
-                      }
-                    },
+        padding:
+            EdgeInsets.fromLTRB(isNarrow ? 12 : 20, 8, isNarrow ? 12 : 20, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // ── Progress bar row ─────────────────────────────────────
+            Row(
+              children: [
+                Text(
+                  _fmt(player.position),
+                  style: const TextStyle(color: Colors.white54, fontSize: 11),
+                ),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 3,
+                      thumbShape:
+                          const RoundSliderThumbShape(enabledThumbRadius: 5),
+                      overlayShape:
+                          const RoundSliderOverlayShape(overlayRadius: 12),
+                      activeTrackColor: _purple,
+                      inactiveTrackColor: Colors.white24,
+                      thumbColor: _purple,
+                    ),
+                    child: Slider(
+                      value: player.progressFraction,
+                      onChanged: (v) {
+                        if (player.duration > Duration.zero) {
+                          notifier.seek(player.duration * v);
+                        }
+                      },
+                    ),
                   ),
                 ),
-              ),
-              Text(
-                _fmt(player.duration),
-                style: const TextStyle(color: Colors.white54, fontSize: 11),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          // ── Main row: song info | controls | volume ────────────────
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // ── Left: Song title + artist ──────────────────────────
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'NOW PLAYING',
-                      style: TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700,
-                        color: _purple,
-                        letterSpacing: 1.5,
-                      ),
+                Text(
+                  _fmt(player.duration),
+                  style: const TextStyle(color: Colors.white54, fontSize: 11),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+
+            if (isNarrow) ...[
+              // ── NARROW: single row — vol-icon | song info | play | next ──
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // Mute toggle icon (replaces full slider on narrow)
+                  GestureDetector(
+                    onTap: () => notifier.toggleMute(),
+                    child: Icon(
+                      player.volume == 0
+                          ? Icons.volume_off
+                          : player.volume < 0.5
+                              ? Icons.volume_down
+                              : Icons.volume_up,
+                      color: player.volume == 0
+                          ? Colors.redAccent
+                          : Colors.white54,
+                      size: 20,
                     ),
-                    const SizedBox(height: 3),
-                    Text(
+                  ),
+                  const SizedBox(width: 8),
+                  // Song title (flexible)
+                  Expanded(
+                    child: Text(
                       song?.title ?? '—',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 14,
+                        fontSize: 13,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    if ((song?.artist ?? song?.folderName) != null)
-                      Text(
-                        song!.artist ?? song.folderName!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _sub, fontSize: 11),
-                      ),
-                  ],
-                ),
-              ),
-              // ── Center: Play/Pause + Next ──────────────────────────
-              // Both buttons use the same Column(circle, gap, label)
-              // structure so they share an identical height and
-              // CrossAxisAlignment.center puts their circles on
-              // exactly the same horizontal axis.
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  // Play / Pause — primary action
-                  _MediaButton(
+                  ),
+                  const SizedBox(width: 8),
+                  // Play / Pause
+                  GestureDetector(
                     onTap: notifier.togglePlayPause,
-                    size: 54,
-                    backgroundColor: _purple,
-                    borderColor: Colors.transparent,
-                    icon: player.isPlaying ? Icons.pause : Icons.play_arrow,
-                    iconColor: Colors.black,
-                    iconSize: 28,
-                    label: player.isPlaying ? 'PAUSE' : 'PLAY',
-                    labelColor: _purple.withOpacity(0.8),
-                  ),
-                  const SizedBox(width: 18),
-                  // Next — secondary action
-                  _MediaButton(
-                    onTap: notifier.skip,
-                    size: 44,
-                    backgroundColor: Colors.white.withOpacity(0.08),
-                    borderColor: Colors.white38,
-                    icon: Icons.skip_next,
-                    iconColor: Colors.white,
-                    iconSize: 22,
-                    label: 'NEXT',
-                    labelColor: Colors.white38,
-                    tooltip: 'Skip to next song',
-                  ),
-                ],
-              ),
-              // ── Right: Volume ──────────────────────────────────────
-              Expanded(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    GestureDetector(
-                      onTap: () => notifier.toggleMute(),
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      decoration: const BoxDecoration(
+                        color: _purple,
+                        shape: BoxShape.circle,
+                      ),
                       child: Icon(
-                        player.volume == 0
-                            ? Icons.volume_off
-                            : player.volume < 0.5
-                                ? Icons.volume_down
-                                : Icons.volume_up,
-                        color: player.volume == 0
-                            ? Colors.redAccent
-                            : Colors.white54,
+                        player.isPlaying ? Icons.pause : Icons.play_arrow,
+                        color: Colors.black,
+                        size: 24,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  // Next
+                  GestureDetector(
+                    onTap: notifier.skip,
+                    child: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.08),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white38),
+                      ),
+                      child: const Icon(
+                        Icons.skip_next,
+                        color: Colors.white,
                         size: 20,
                       ),
                     ),
-                    const SizedBox(width: 4),
-                    SizedBox(
-                      width: 90,
-                      child: SliderTheme(
-                        data: SliderTheme.of(context).copyWith(
-                          trackHeight: 2,
-                          thumbShape: const RoundSliderThumbShape(
-                              enabledThumbRadius: 4),
-                          overlayShape:
-                              const RoundSliderOverlayShape(overlayRadius: 8),
-                          activeTrackColor: Colors.white70,
-                          inactiveTrackColor: Colors.white24,
-                          thumbColor: Colors.white,
+                  ),
+                ],
+              ),
+            ] else ...[
+              // ── WIDE: 3-column — song info | controls | volume ────────
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // Left: Song title + artist
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          'NOW PLAYING',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                            color: _purple,
+                            letterSpacing: 1.5,
+                          ),
                         ),
-                        child: Slider(
-                          value: player.volume.clamp(0.0, 1.0),
-                          onChanged: (v) => notifier.setVolume(v),
+                        const SizedBox(height: 3),
+                        Text(
+                          song?.title ?? '—',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                      ),
+                        if ((song?.artist ?? song?.folderName) != null)
+                          Text(
+                            song!.artist ?? song.folderName!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: _sub, fontSize: 11),
+                          ),
+                      ],
                     ),
-                    const SizedBox(width: 4),
-                    SizedBox(
-                      width: 36,
-                      child: Text(
-                        '${(player.volume * 100).round()}%',
-                        style: const TextStyle(
-                            color: Colors.white54, fontSize: 11),
+                  ),
+                  // Center: Play/Pause + Next
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      _MediaButton(
+                        onTap: notifier.togglePlayPause,
+                        size: 54,
+                        backgroundColor: _purple,
+                        borderColor: Colors.transparent,
+                        icon: player.isPlaying ? Icons.pause : Icons.play_arrow,
+                        iconColor: Colors.black,
+                        iconSize: 28,
+                        label: player.isPlaying ? 'PAUSE' : 'PLAY',
+                        labelColor: _purple.withOpacity(0.8),
                       ),
+                      const SizedBox(width: 18),
+                      _MediaButton(
+                        onTap: notifier.skip,
+                        size: 44,
+                        backgroundColor: Colors.white.withOpacity(0.08),
+                        borderColor: Colors.white38,
+                        icon: Icons.skip_next,
+                        iconColor: Colors.white,
+                        iconSize: 22,
+                        label: 'NEXT',
+                        labelColor: Colors.white38,
+                        tooltip: 'Skip to next song',
+                      ),
+                    ],
+                  ),
+                  // Right: Volume slider
+                  Expanded(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        GestureDetector(
+                          onTap: () => notifier.toggleMute(),
+                          child: Icon(
+                            player.volume == 0
+                                ? Icons.volume_off
+                                : player.volume < 0.5
+                                    ? Icons.volume_down
+                                    : Icons.volume_up,
+                            color: player.volume == 0
+                                ? Colors.redAccent
+                                : Colors.white54,
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(
+                                minWidth: 40, maxWidth: 120),
+                            child: SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                trackHeight: 2,
+                                thumbShape: const RoundSliderThumbShape(
+                                    enabledThumbRadius: 4),
+                                overlayShape: const RoundSliderOverlayShape(
+                                    overlayRadius: 8),
+                                activeTrackColor: Colors.white70,
+                                inactiveTrackColor: Colors.white24,
+                                thumbColor: Colors.white,
+                              ),
+                              child: Slider(
+                                value: player.volume.clamp(0.0, 1.0),
+                                onChanged: (v) => notifier.setVolume(v),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        SizedBox(
+                          width: 36,
+                          child: Text(
+                            '${(player.volume * 100).round()}%',
+                            style: const TextStyle(
+                                color: Colors.white54, fontSize: 11),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ],
-          ),
-        ],
-      ),
-    );
+          ],
+        ),
+      );
+    });
   }
 }
 
@@ -2354,6 +2253,81 @@ class _MediaButton extends StatelessWidget {
   }
 }
 
+// ── No-folder inline prompt (shown in sidebar when no folder is set) ─────────
+
+class _NoFolderPrompt extends StatelessWidget {
+  const _NoFolderPrompt({required this.onPick});
+  final VoidCallback onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: _queueGreen.withOpacity(0.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.folder_open_outlined,
+                  color: _queueGreen, size: 30),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'No local songs yet',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Tap below to choose the folder where your karaoke files are saved.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white38,
+                fontSize: 12,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: onPick,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _queueGreen,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  textStyle: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                icon: const Icon(Icons.folder_open, size: 18),
+                label: const Text('Choose Folder'),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'You can still search & play songs online while you decide.',
+              textAlign: TextAlign.center,
+              style:
+                  TextStyle(color: Colors.white24, fontSize: 11, height: 1.4),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ── Queue panel ──────────────────────────────────────────────────────────────
 
 class _QueuePanel extends ConsumerWidget {
@@ -2377,7 +2351,7 @@ class _QueuePanel extends ConsumerWidget {
           color: _sidebarBg,
           border: Border(top: BorderSide(color: _border, width: 2)),
         ),
-        padding: const EdgeInsets.all(20),
+        padding: EdgeInsets.all(height < 160 ? 10 : 20),
         child: ClipRect(
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -2412,24 +2386,27 @@ class _QueuePanel extends ConsumerWidget {
             const Gap(12),
             Expanded(
               child: totalCount == 0
-                  ? const Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.queue_music_rounded,
-                              size: 36, color: Colors.white12),
-                          SizedBox(height: 10),
-                          Text('Queue is empty',
-                              style: TextStyle(
-                                  color: Colors.white38,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600)),
-                          SizedBox(height: 4),
-                          Text('Add songs from the list on the left',
-                              style: TextStyle(
-                                  color: Colors.white24, fontSize: 12),
-                              textAlign: TextAlign.center),
-                        ],
+                  ? Center(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.queue_music_rounded,
+                                size: 36, color: Colors.white12),
+                            const SizedBox(height: 10),
+                            const Text('Queue is empty',
+                                style: TextStyle(
+                                    color: Colors.white38,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600)),
+                            const SizedBox(height: 4),
+                            const Text('Add songs from the list on the left',
+                                style: TextStyle(
+                                    color: Colors.white24, fontSize: 12),
+                                textAlign: TextAlign.center),
+                          ],
+                        ),
                       ),
                     )
                   : ListView.builder(
@@ -2519,6 +2496,104 @@ class _QueueItem extends StatelessWidget {
             ),
           ),
       ]),
+    );
+  }
+}
+
+// ── Narrow layout tab bar ──────────────────────────────────────────────────────
+class _NarrowTabBar extends StatelessWidget {
+  const _NarrowTabBar({
+    required this.activeTab,
+    required this.onTab,
+    required this.isPlaying,
+  });
+
+  final int activeTab;
+  final ValueChanged<int> onTab;
+  final bool isPlaying;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: _sidebarBg,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              _Tab(
+                label: 'Songs',
+                icon: Icons.library_music_outlined,
+                selected: activeTab == 0,
+                onTap: () => onTab(0),
+              ),
+              _Tab(
+                label: 'Now Playing',
+                icon: isPlaying
+                    ? Icons.play_circle_filled
+                    : Icons.play_circle_outline,
+                selected: activeTab == 1,
+                onTap: () => onTab(1),
+              ),
+            ],
+          ),
+          const Divider(height: 1, thickness: 1, color: _border),
+        ],
+      ),
+    );
+  }
+}
+
+class _Tab extends StatelessWidget {
+  const _Tab({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    const inactive = Color(0xFF9CA3AF);
+
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 20, color: selected ? _purple : inactive),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                  color: selected ? _purple : inactive,
+                ),
+              ),
+              const SizedBox(height: 4),
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                height: 2,
+                width: selected ? 32 : 0,
+                decoration: BoxDecoration(
+                  color: _purple,
+                  borderRadius: BorderRadius.circular(1),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
