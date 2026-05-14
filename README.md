@@ -108,38 +108,6 @@ flutter build windows --release
 
 ---
 
-## 📋 Changelog
-
-### v1.0.0 — May 2026
-- ✅ Initial release
-- ✅ Local file library with folder scanning
-- ✅ YouTube search and streaming via `youtube_explode_dart`
-- ✅ Mixed local + YouTube queue with auto-advance
-- ✅ Always-visible player control bar (play/pause, skip, volume, seek)
-- ✅ Fullscreen video mode with fade-in overlay controls
-- ✅ Drag-to-resize queue panel
-- ✅ Sidebar with search, settings, folder picker
-- ✅ Accessible UI — large tap targets and labeled buttons
-
----
-
-## 🗺 Roadmap
-
-### 🚧 Planned
-- [ ] Lyrics display (LRC file parser + sync)
-- [ ] Pitch shifter / key changer (via media_kit audio filters)
-- [ ] Queue history screen
-- [ ] Remote queue control over local Wi-Fi (HTTP API)
-- [ ] Export queue as PDF setlist
-
-### 🔮 Future
-- [ ] Scoring system (pitch detection)
-- [ ] Multi-room / multi-screen support
-- [ ] Singer management (turn-based queue per singer)
-- [ ] "Your turn" notifications
-
----
-
 ## 👤 Developer
 
 **Mark Keshian M. Mangabay**
