@@ -53,12 +53,24 @@ dev_dependencies:
   custom_lint: ^0.7.6
   riverpod_lint: ^2.3.10
   flutter_launcher_icons: ^0.14.3
+  msix: ^3.16.7
 
 flutter_launcher_icons:
   android: true
   ios: false
   image_path: "assets/icons/applogo.png"
   min_sdk_android: 21
+
+msix_config:
+  display_name: Karaoke Chan
+  publisher_display_name: markkeshian
+  identity_name: com.karaokechan.karaokeChan
+  msix_version: 1.0.0.0
+  description: A cross-platform karaoke queue app
+  publisher: CN=markkeshian
+  logo_path: assets/icons/applogo.png
+  capabilities: internetClient, privateNetworkClientServer
+  languages: en-us
 
 flutter:
   uses-material-design: true

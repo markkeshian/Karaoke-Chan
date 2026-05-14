@@ -64,14 +64,14 @@ jobs:
       - name: Build Windows
         run: flutter build windows --release
 
-      - name: Zip Windows build
-        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath karaoke-chan-windows.zip
+      - name: Build MSIX
+        run: dart run msix:create
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: karaoke-chan-windows.zip
+          path: build/windows/x64/runner/Release/karaoke_chan.msix
 
   build-macos:
     name: Build macOS
@@ -131,9 +131,9 @@ jobs:
             3. Open the APK and tap **Install**
 
             ### 🪟 Windows
-            1. Download `karaoke-chan-windows.zip`
-            2. Extract the zip file
-            3. Run `karaoke_chan.exe`
+            1. Download `karaoke_chan.msix`
+            2. Double-click to install (no extraction needed!)
+            3. Launch **Karaoke Chan** from the Start Menu
 
             ### 🍎 macOS
             1. Download `karaoke-chan-macos.zip`
@@ -141,7 +141,7 @@ jobs:
             3. Right-click → **Open** (first time only, to bypass Gatekeeper)
           files: |
             android-apk/karaoke-chan-android.apk
-            windows-build/karaoke-chan-windows.zip
+            windows-build/karaoke_chan.msix
             macos-build/karaoke-chan-macos.zip
           draft: false
           prerelease: false
