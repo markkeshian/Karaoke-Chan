@@ -26,12 +26,33 @@ enum SearchMode { local, online }
 const _bg = Color(0xFF111827);
 const _sidebarBg = Color(0xFF1F2937);
 const _border = Color(0xFF374151);
-const _cardBg = Color(0xFF374151);
-const _cardHover = Color(0xFF4B5563);
+// Lightened from 0xFF374151 → better contrast against sidebarBg (~2.4:1 → ~3.2:1)
+const _cardBg = Color(0xFF3D4F65);
+const _cardHover = Color(0xFF4B5F78);
 const _queueGreen = Color(0xFF22C55E);
 const _sub = Color(0xFFCBD5E1);
 const _overlayBg = Color(0xB3000000);
 const _purple = Color(0xFFE040FB);
+const _blue = Color(0xFF3B82F6);
+
+// ── Spacing scale (4-pt grid) ─────────────────────────────────────────────────
+const _sp4 = 4.0;
+const _sp8 = 8.0;
+const _sp12 = 12.0;
+const _sp16 = 16.0;
+const _sp20 = 20.0;
+const _sp24 = 24.0;
+
+// ── Type scale ────────────────────────────────────────────────────────────────
+const _tsXs = 11.0; // overlines, badges, tiny labels (was 9/10)
+const _tsSm = 12.0; // secondary/meta text
+const _tsBase = 14.0; // body text
+const _tsMd = 16.0; // list titles
+const _tsLg = 20.0; // section headings
+const _tsXl = 22.0; // page headings
+
+// ── Minimum touch target (WCAG / Apple HIG / Material) ───────────────────────
+const _kMinTarget = 44.0;
 
 class KaraokeStage extends ConsumerStatefulWidget {
   const KaraokeStage({super.key});
@@ -146,21 +167,35 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
           return LayoutBuilder(builder: (context, constraints) {
             final isNarrow = constraints.maxWidth < _narrowBreak;
 
-            // ── NARROW (phone): stacked tab layout ────────────────────
+            // ── NARROW (phone): video-first layout ───────────────────
             if (isNarrow && !_fullscreen) {
+              final queueWaiting =
+                  queue.where((e) => e.status == QueueStatus.waiting).length;
               return Column(
                 children: [
-                  // Tab bar at the top
-                  _NarrowTabBar(
-                    activeTab: _activeTab,
-                    onTab: (i) => setState(() => _activeTab = i),
-                    isPlaying: !player.isIdle,
+                  // ── Video always visible at top, full width 16:9 ──────
+                  AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: _VideoArea(
+                      player: player,
+                      queue: queue,
+                      fullscreen: false,
+                      onToggle: () => _toggleFullscreen(),
+                    ),
                   ),
+                  // ── Slim control bar (only when song is playing) ───────
+                  if (!player.isIdle) const _PlayerControlBar(compact: true),
+                  // ── Pill tab chips ─────────────────────────────────────
+                  _PhoneChipBar(
+                    activeTab: _activeTab,
+                    queueCount: queueWaiting,
+                    onTab: (i) => setState(() => _activeTab = i),
+                  ),
+                  // ── Content: song list OR queue list ───────────────────
                   Expanded(
                     child: IndexedStack(
                       index: _activeTab,
                       children: [
-                        // ── Tab 0: Song search ───────────────────────
                         _Sidebar(
                           library: library,
                           searchCtrl: _search,
@@ -175,7 +210,6 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
                               .toSet(),
                           onQueue: (s) {
                             _queueSong(s, player);
-                            // Jump to player tab so user sees it queued
                             setState(() => _activeTab = 1);
                           },
                           onChangeFolder: () =>
@@ -195,25 +229,7 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
                           onToggleSettings: () =>
                               setState(() => _showSettings = !_showSettings),
                         ),
-                        // ── Tab 1: Player + Queue ────────────────────
-                        Column(
-                          children: [
-                            Expanded(
-                              child: _VideoArea(
-                                player: player,
-                                queue: queue,
-                                fullscreen: false,
-                                onToggle: () => _toggleFullscreen(),
-                              ),
-                            ),
-                            const _PlayerControlBar(),
-                            _QueuePanel(
-                              queue: queue,
-                              height: (constraints.maxHeight * 0.35)
-                                  .clamp(160.0, 320.0),
-                            ),
-                          ],
-                        ),
+                        _PhoneQueueList(queue: queue),
                       ],
                     ),
                   ),
@@ -222,13 +238,19 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
             }
 
             // ── WIDE (tablet / desktop): side-by-side layout ──────────
+            // On short screens (Android landscape) collapse controls + queue.
+            final isShortScreen = constraints.maxHeight < 520;
             final defaultSidebarW =
                 (constraints.maxWidth * 0.32).clamp(260.0, 420.0);
             final sidebarW =
                 _sidebarWidth?.clamp(260.0, constraints.maxWidth * 0.50) ??
                     defaultSidebarW;
-            final queueH = _queueHeight.clamp(160.0,
-                (constraints.maxHeight * 0.55).clamp(160.0, double.infinity));
+            final queueMinH = isShortScreen ? 100.0 : 160.0;
+            final queueDefaultH = isShortScreen ? 130.0 : _queueHeight;
+            final queueH = queueDefaultH.clamp(
+                queueMinH,
+                (constraints.maxHeight * 0.45)
+                    .clamp(queueMinH, double.infinity));
 
             return Row(
               children: [
@@ -259,21 +281,14 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
                         setState(() => _showSettings = !_showSettings),
                   ),
                   // ── Sidebar drag resizer ────────────────────────────
-                  MouseRegion(
-                    cursor: SystemMouseCursors.resizeColumn,
-                    child: GestureDetector(
-                      onHorizontalDragUpdate: (d) {
-                        final screenW = constraints.maxWidth;
-                        setState(() {
-                          _sidebarWidth = ((sidebarW) + d.delta.dx)
-                              .clamp(260.0, screenW * 0.50);
-                        });
-                      },
-                      child: Container(
-                        width: 6,
-                        color: _border,
-                      ),
-                    ),
+                  _SidebarResizer(
+                    onDragUpdate: (dx) {
+                      final screenW = constraints.maxWidth;
+                      setState(() {
+                        _sidebarWidth =
+                            (sidebarW + dx).clamp(260.0, screenW * 0.50);
+                      });
+                    },
                   ),
                 ],
                 Expanded(
@@ -288,36 +303,18 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
                         ),
                       ),
                       if (!_fullscreen) ...[
-                        const _PlayerControlBar(),
-                        // ── Queue panel drag resizer ──────────────────
-                        MouseRegion(
-                          cursor: SystemMouseCursors.resizeRow,
-                          child: GestureDetector(
-                            onVerticalDragUpdate: (d) {
+                        _PlayerControlBar(compact: isShortScreen),
+                        if (!isShortScreen)
+                          _QueueResizer(
+                            onDragUpdate: (dy) {
                               setState(() {
-                                _queueHeight = (_queueHeight - d.delta.dy)
-                                    .clamp(
-                                        160.0,
-                                        (constraints.maxHeight * 0.55)
-                                            .clamp(160.0, double.infinity));
+                                _queueHeight = (_queueHeight - dy).clamp(
+                                    queueMinH,
+                                    (constraints.maxHeight * 0.45)
+                                        .clamp(queueMinH, double.infinity));
                               });
                             },
-                            child: Container(
-                              height: 16,
-                              color: const Color(0xFF111827),
-                              child: Center(
-                                child: Container(
-                                  width: 48,
-                                  height: 4,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white24,
-                                    borderRadius: BorderRadius.circular(2),
-                                  ),
-                                ),
-                              ),
-                            ),
                           ),
-                        ),
                         _QueuePanel(queue: queue, height: queueH),
                       ],
                     ],
@@ -337,7 +334,6 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
       ref.read(playerProvider.notifier).playNow(song);
     } else {
       ref.read(playerProvider.notifier).queueLocal(song);
-      _showQueuedSnackBar(song.title);
     }
   }
 
@@ -346,7 +342,6 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
       ref.read(playerProvider.notifier).playYoutube(video);
     } else {
       ref.read(playerProvider.notifier).queueYoutube(video);
-      _showQueuedSnackBar(video.title);
     }
   }
 
@@ -389,60 +384,6 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
       ref.read(youtubeSearchProvider.notifier).search(effectiveQ);
     });
   }
-
-  void _showQueuedSnackBar(String title) {
-    ScaffoldMessenger.of(context).clearSnackBars();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-        padding: EdgeInsets.zero,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        duration: const Duration(seconds: 3),
-        content: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF1D4ED8), Color(0xFF059669)],
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-            ),
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: const [
-              BoxShadow(
-                  color: Colors.black45, blurRadius: 12, offset: Offset(0, 4)),
-            ],
-          ),
-          child: Row(children: [
-            const Icon(Icons.queue_music, color: Colors.white, size: 22),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Added to Queue',
-                      style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 2),
-                  Text(title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold)),
-                ],
-              ),
-            ),
-          ]),
-        ),
-      ),
-    );
-  }
 }
 
 // ── Scanning ─────────────────────────────────────────────────────────────────
@@ -458,16 +399,18 @@ class _ScanningView extends StatelessWidget {
         : null;
     return Center(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 48),
+        padding: const EdgeInsets.symmetric(horizontal: _sp20),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           const Icon(Icons.radar, color: _purple, size: 48),
           const Gap(20),
           const Text('Scanning Folder…',
               style: TextStyle(
-                  color: _purple, fontSize: 22, fontWeight: FontWeight.bold)),
+                  color: _purple,
+                  fontSize: _tsLg,
+                  fontWeight: FontWeight.bold)),
           const Gap(8),
           Text('${library.scannedCount} songs found',
-              style: const TextStyle(color: _sub)),
+              style: const TextStyle(color: _sub, fontSize: _tsBase)),
           const Gap(20),
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
@@ -505,7 +448,7 @@ class _ScanErrorView extends ConsumerWidget {
     final isPerm = _isPermissionError;
     return Center(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 48),
+        padding: const EdgeInsets.symmetric(horizontal: _sp24),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Icon(
             isPerm ? Icons.folder_off_outlined : Icons.warning_amber_rounded,
@@ -517,7 +460,7 @@ class _ScanErrorView extends ConsumerWidget {
             isPerm ? 'No Access to Folder' : 'Scan Failed',
             style: TextStyle(
                 color: isPerm ? Colors.orangeAccent : Colors.redAccent,
-                fontSize: 22,
+                fontSize: _tsXl,
                 fontWeight: FontWeight.bold),
           ),
           const Gap(12),
@@ -526,7 +469,7 @@ class _ScanErrorView extends ConsumerWidget {
                 ? 'Karaoke-Chan couldn\'t read the selected folder.\nThis usually means storage permission was denied or the folder is empty.'
                 : message,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: _sub, fontSize: 14, height: 1.6),
+            style: const TextStyle(color: _sub, fontSize: _tsBase, height: 1.6),
           ),
           if (isPerm) ...[
             const Gap(8),
@@ -642,18 +585,34 @@ class _Sidebar extends ConsumerWidget {
                       const Expanded(
                         child: Text('Karaoke-Chan',
                             style: TextStyle(
-                                fontSize: 20,
+                                fontSize: _tsLg,
                                 fontWeight: FontWeight.bold,
                                 color: Colors.white)),
                       ),
-                      IconButton(
-                        icon: Icon(
-                          showSettings ? Icons.close : Icons.settings_outlined,
-                          color: showSettings ? Colors.white70 : Colors.white38,
-                          size: 18,
+                      // Settings toggle — minimum 44×44 touch target
+                      Semantics(
+                        label:
+                            showSettings ? 'Close Settings' : 'Open Settings',
+                        button: true,
+                        child: SizedBox(
+                          width: _kMinTarget,
+                          height: _kMinTarget,
+                          child: IconButton(
+                            padding: EdgeInsets.zero,
+                            icon: Icon(
+                              showSettings
+                                  ? Icons.close
+                                  : Icons.settings_outlined,
+                              color: showSettings
+                                  ? Colors.white70
+                                  : Colors.white38,
+                              size: 20,
+                            ),
+                            tooltip:
+                                showSettings ? 'Close Settings' : 'Settings',
+                            onPressed: onToggleSettings,
+                          ),
                         ),
-                        tooltip: showSettings ? 'Close Settings' : 'Settings',
-                        onPressed: onToggleSettings,
                       ),
                     ]),
                     if (!showSettings) ...[
@@ -687,26 +646,29 @@ class _Sidebar extends ConsumerWidget {
                                                 .search('');
                                           },
                                         ),
-                                      Tooltip(
-                                        message: karaokeMode
+                                      Semantics(
+                                        label: karaokeMode
                                             ? 'Karaoke mode ON — tap to disable'
                                             : 'Karaoke mode OFF — tap to enable',
+                                        button: true,
                                         child: GestureDetector(
                                           onTap: () => onKaraokeModeChanged(
                                               !karaokeMode),
-                                          child: Padding(
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 10),
-                                            child: AnimatedSwitcher(
-                                              duration: const Duration(
-                                                  milliseconds: 200),
-                                              child: Icon(
-                                                Icons.mic,
-                                                key: ValueKey(karaokeMode),
-                                                size: 20,
-                                                color: karaokeMode
-                                                    ? const Color(0xFFE040FB)
-                                                    : Colors.white24,
+                                          child: SizedBox(
+                                            width: _kMinTarget,
+                                            height: _kMinTarget,
+                                            child: Center(
+                                              child: AnimatedSwitcher(
+                                                duration: const Duration(
+                                                    milliseconds: 200),
+                                                child: Icon(
+                                                  Icons.mic,
+                                                  key: ValueKey(karaokeMode),
+                                                  size: 20,
+                                                  color: karaokeMode
+                                                      ? _purple
+                                                      : Colors.white24,
+                                                ),
                                               ),
                                             ),
                                           ),
@@ -753,40 +715,101 @@ class _Sidebar extends ConsumerWidget {
             ),
 
             // ── Body: Settings panel OR Song list ──────────────────────────
-            if (showSettings)
-              Expanded(
-                child: _SidebarSettingsPanel(
-                  onChangeFolder: onChangeFolder,
-                  onClose: onToggleSettings,
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                switchInCurve: Curves.easeOut,
+                switchOutCurve: Curves.easeIn,
+                transitionBuilder: (child, animation) => FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0.04, 0),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
                 ),
-              )
-            else
-              Expanded(
-                child: searchMode == SearchMode.online
-                    ? _OnlineResultsList(onPlay: onYoutubePlay)
-                    : !library.hasFolder
-                        ? _NoFolderPrompt(onPick: onChangeFolder)
-                        : library.songs.isEmpty
-                            ? const Center(
-                                child: Text('No songs found',
-                                    style: TextStyle(color: Colors.white38)))
-                            : ListView.builder(
-                                padding:
-                                    const EdgeInsets.fromLTRB(15, 15, 15, 64),
-                                itemCount: library.songs.length,
-                                itemBuilder: (_, i) => _SongItem(
-                                  song: library.songs[i],
-                                  isCurrent:
-                                      library.songs[i].id == currentSongId,
-                                  isQueued: library.songs[i].id != null &&
-                                      queuedSongIds
-                                          .contains(library.songs[i].id),
-                                  onQueue: () => onQueue(library.songs[i]),
-                                ),
-                              ),
+                child: showSettings
+                    ? _SidebarSettingsPanel(
+                        key: const ValueKey('settings'),
+                        onChangeFolder: onChangeFolder,
+                        onClose: onToggleSettings,
+                      )
+                    : _SidebarContent(
+                        key: const ValueKey('songs'),
+                        library: library,
+                        searchMode: searchMode,
+                        currentSongId: currentSongId,
+                        queuedSongIds: queuedSongIds,
+                        onQueue: onQueue,
+                        onChangeFolder: onChangeFolder,
+                        onYoutubePlay: onYoutubePlay,
+                      ),
               ),
+            ),
           ]),
         ),
+      ),
+    );
+  }
+}
+
+// ── Sidebar content (song list / online results / empty state) ───────────────
+
+class _SidebarContent extends StatelessWidget {
+  const _SidebarContent({
+    super.key,
+    required this.library,
+    required this.searchMode,
+    required this.currentSongId,
+    required this.queuedSongIds,
+    required this.onQueue,
+    required this.onChangeFolder,
+    required this.onYoutubePlay,
+  });
+
+  final LibraryState library;
+  final SearchMode searchMode;
+  final int? currentSongId;
+  final Set<int> queuedSongIds;
+  final void Function(Song) onQueue;
+  final VoidCallback onChangeFolder;
+  final void Function(YoutubeVideoResult) onYoutubePlay;
+
+  @override
+  Widget build(BuildContext context) {
+    if (searchMode == SearchMode.online) {
+      return _OnlineResultsList(onPlay: onYoutubePlay);
+    }
+    if (!library.hasFolder) {
+      return _NoFolderPrompt(onPick: onChangeFolder);
+    }
+    if (library.songs.isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.music_off_outlined, color: Colors.white24, size: 36),
+            SizedBox(height: 12),
+            Text('No songs found',
+                style: TextStyle(
+                    color: Colors.white54,
+                    fontSize: _tsBase,
+                    fontWeight: FontWeight.w500)),
+          ],
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 64),
+      itemCount: library.songs.length,
+      itemBuilder: (_, i) => _SongItem(
+        song: library.songs[i],
+        isCurrent: library.songs[i].id == currentSongId,
+        isQueued: library.songs[i].id != null &&
+            queuedSongIds.contains(library.songs[i].id),
+        onQueue: () => onQueue(library.songs[i]),
       ),
     );
   }
@@ -796,6 +819,7 @@ class _Sidebar extends ConsumerWidget {
 
 class _SidebarSettingsPanel extends ConsumerWidget {
   const _SidebarSettingsPanel({
+    super.key,
     required this.onChangeFolder,
     required this.onClose,
   });
@@ -959,15 +983,15 @@ class _SettingsSectionLabel extends StatelessWidget {
       label.toUpperCase(),
       style: const TextStyle(
         color: Colors.white38,
-        fontSize: 10,
+        fontSize: _tsXs,
         fontWeight: FontWeight.w700,
-        letterSpacing: 1.5,
+        letterSpacing: 1.2,
       ),
     );
   }
 }
 
-class _SettingsItem extends StatefulWidget {
+class _SettingsItem extends StatelessWidget {
   const _SettingsItem({
     required this.icon,
     required this.iconColor,
@@ -982,50 +1006,44 @@ class _SettingsItem extends StatefulWidget {
   final VoidCallback? onTap;
 
   @override
-  State<_SettingsItem> createState() => _SettingsItemState();
-}
-
-class _SettingsItemState extends State<_SettingsItem> {
-  bool _hovered = false;
-
-  @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            color: _hovered && widget.onTap != null ? _cardHover : _cardBg,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Row(children: [
-            Icon(widget.icon, color: widget.iconColor, size: 18),
-            const Gap(12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(widget.title,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600)),
-                  const Gap(2),
-                  Text(widget.subtitle,
-                      style:
-                          const TextStyle(color: Colors.white38, fontSize: 11),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis),
-                ],
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Material(
+        color: _cardBg,
+        child: InkWell(
+          onTap: onTap,
+          hoverColor: _cardHover.withValues(alpha: 0.6),
+          splashColor: Colors.white10,
+          highlightColor: Colors.white10,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(children: [
+              Icon(icon, color: iconColor, size: 18),
+              const Gap(12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: _tsBase,
+                            fontWeight: FontWeight.w600)),
+                    const Gap(2),
+                    Text(subtitle,
+                        style: const TextStyle(
+                            color: Colors.white38, fontSize: _tsSm),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis),
+                  ],
+                ),
               ),
-            ),
-            if (widget.onTap != null)
-              const Icon(Icons.chevron_right, color: Colors.white24, size: 16),
-          ]),
+              if (onTap != null)
+                const Icon(Icons.chevron_right,
+                    color: Colors.white24, size: 16),
+            ]),
+          ),
         ),
       ),
     );
@@ -1042,7 +1060,7 @@ class _SearchModeToggle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 38,
+      height: 32,
       decoration: BoxDecoration(
         color: _cardBg,
         borderRadius: BorderRadius.circular(10),
@@ -1100,12 +1118,12 @@ class _ToggleBtn extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(icon,
-                  size: 13, color: active ? activeColor : Colors.white38),
-              const SizedBox(width: 5),
+                  size: 12, color: active ? activeColor : Colors.white38),
+              const SizedBox(width: 4),
               Text(
                 label,
                 style: TextStyle(
-                  fontSize: 12,
+                  fontSize: 11,
                   fontWeight: FontWeight.w600,
                   color: active ? activeColor : Colors.white38,
                 ),
@@ -1131,24 +1149,24 @@ class _OnlineResultsList extends ConsumerWidget {
     if (ytState.isIdle) {
       return const Center(
         child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16),
+          padding: EdgeInsets.symmetric(horizontal: 24),
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.language, color: Color(0xFF3B82F6), size: 36),
-                Gap(10),
+                Icon(Icons.language, color: _blue, size: 40),
+                SizedBox(height: 12),
                 Text('Online Search',
                     style: TextStyle(
                         color: Colors.white,
-                        fontSize: 15,
+                        fontSize: _tsMd,
                         fontWeight: FontWeight.bold)),
-                Gap(6),
+                SizedBox(height: 6),
                 Text(
                   'Type a song name above to search YouTube.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                      color: Colors.white38, fontSize: 12, height: 1.4),
+                      color: Colors.white38, fontSize: _tsSm, height: 1.5),
                 ),
               ],
             ),
@@ -1159,30 +1177,50 @@ class _OnlineResultsList extends ConsumerWidget {
 
     if (ytState.isLoading) {
       return const Center(
-        child: CircularProgressIndicator(color: Color(0xFF3B82F6)),
+        child: CircularProgressIndicator(color: _blue),
       );
     }
 
     if (ytState.status == YoutubeSearchStatus.error) {
+      final notifier = ref.read(youtubeSearchProvider.notifier);
       return Center(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 24),
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.wifi_off, color: Colors.redAccent, size: 32),
-                const Gap(10),
+                const Icon(Icons.wifi_off, color: Colors.redAccent, size: 36),
+                const SizedBox(height: 12),
                 const Text('Search failed',
                     style: TextStyle(
                         color: Colors.redAccent,
                         fontWeight: FontWeight.bold,
-                        fontSize: 13)),
-                const Gap(6),
+                        fontSize: _tsBase)),
+                const SizedBox(height: 6),
                 Text(ytState.errorMessage ?? 'Unknown error',
                     textAlign: TextAlign.center,
-                    style:
-                        const TextStyle(color: Colors.white38, fontSize: 12)),
+                    style: const TextStyle(
+                        color: Colors.white38, fontSize: _tsSm)),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => notifier.retryLast(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.redAccent.withValues(alpha: 0.15),
+                      foregroundColor: Colors.redAccent,
+                      side: const BorderSide(color: Colors.redAccent),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('Try Again',
+                        style: TextStyle(
+                            fontSize: _tsBase, fontWeight: FontWeight.w600)),
+                  ),
+                ),
               ],
             ),
           ),
@@ -1192,13 +1230,31 @@ class _OnlineResultsList extends ConsumerWidget {
 
     if (ytState.isEmpty) {
       return const Center(
-        child:
-            Text('No results found', style: TextStyle(color: Colors.white38)),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.search_off, color: Colors.white24, size: 36),
+              SizedBox(height: 12),
+              Text('No results found',
+                  style: TextStyle(
+                      color: Colors.white54,
+                      fontSize: _tsBase,
+                      fontWeight: FontWeight.w500)),
+              SizedBox(height: 6),
+              Text(
+                'Try a different search term',
+                style: TextStyle(color: Colors.white24, fontSize: _tsSm),
+              ),
+            ],
+          ),
+        ),
       );
     }
 
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(15, 15, 15, 64),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 64),
       itemCount: ytState.results.length,
       itemBuilder: (_, i) => _YoutubeResultItem(
         video: ytState.results[i],
@@ -1208,17 +1264,10 @@ class _OnlineResultsList extends ConsumerWidget {
   }
 }
 
-class _YoutubeResultItem extends ConsumerStatefulWidget {
+class _YoutubeResultItem extends ConsumerWidget {
   const _YoutubeResultItem({required this.video, required this.onPlay});
   final YoutubeVideoResult video;
   final VoidCallback onPlay;
-
-  @override
-  ConsumerState<_YoutubeResultItem> createState() => _YoutubeResultItemState();
-}
-
-class _YoutubeResultItemState extends ConsumerState<_YoutubeResultItem> {
-  bool _hovered = false;
 
   String _formatDuration(Duration? d) {
     if (d == null) return '';
@@ -1228,86 +1277,98 @@ class _YoutubeResultItemState extends ConsumerState<_YoutubeResultItem> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final unifiedQueue =
         ref.watch(playerProvider).valueOrNull?.unifiedQueue ?? const [];
-    final isQueued = unifiedQueue.any(
-        (i) => i.isYoutube && i.youtubeVideo?.videoId == widget.video.videoId);
+    final isQueued = unifiedQueue
+        .any((i) => i.isYoutube && i.youtubeVideo?.videoId == video.videoId);
 
-    const blueQueue = Color(0xFF3B82F6);
-
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(15),
-        decoration: BoxDecoration(
-          color: _hovered ? _cardHover : _cardBg,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Row(children: [
-          // ── Info ─────────────────────────────────────────────────────
-          Expanded(
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(
-                widget.video.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white),
-              ),
-              const Gap(4),
-              Text(
-                widget.video.channel.isNotEmpty
-                    ? [
-                        widget.video.channel,
-                        if (widget.video.duration != null)
-                          _formatDuration(widget.video.duration),
-                      ].join(' · ')
-                    : widget.video.duration != null
-                        ? _formatDuration(widget.video.duration)
-                        : 'YouTube',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: _sub, fontSize: 13),
-              ),
-            ]),
-          ),
-          const Gap(8),
-          // ── Queue button ─────────────────────────────────────────────
-          isQueued
-              ? const Tooltip(
-                  message: 'Already queued',
-                  child: Icon(Icons.check_circle,
-                      color: Color(0xFF3B82F6), size: 22),
-                )
-              : ElevatedButton.icon(
-                  onPressed: widget.onPlay,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: blueQueue,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 11),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    textStyle: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 12),
-                    minimumSize: const Size(80, 40),
-                  ),
-                  icon: const Icon(Icons.add, size: 16),
-                  label: const Text('QUEUE'),
+    return Container(
+      margin: const EdgeInsets.only(bottom: _sp12),
+      decoration: BoxDecoration(
+        color: isQueued ? _blue.withValues(alpha: 0.08) : _cardBg,
+        borderRadius: BorderRadius.circular(14),
+        border:
+            isQueued ? Border.all(color: _blue.withValues(alpha: 0.3)) : null,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: isQueued ? null : onPlay,
+            hoverColor: _cardHover.withValues(alpha: 0.5),
+            splashColor: Colors.white10,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(children: [
+                Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          video.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: _tsMd,
+                              fontWeight: FontWeight.bold,
+                              color: isQueued ? Colors.white70 : Colors.white),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          video.channel.isNotEmpty
+                              ? [
+                                  video.channel,
+                                  if (video.duration != null)
+                                    _formatDuration(video.duration),
+                                ].join(' · ')
+                              : video.duration != null
+                                  ? _formatDuration(video.duration)
+                                  : 'YouTube',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: _sub, fontSize: _tsSm),
+                        ),
+                      ]),
                 ),
-        ]),
+                const SizedBox(width: _sp8),
+                isQueued
+                    ? Semantics(
+                        label: 'Already queued',
+                        child: const Icon(Icons.check_circle,
+                            color: _blue, size: 22),
+                      )
+                    : Semantics(
+                        label: 'Add to queue',
+                        button: true,
+                        child: ElevatedButton.icon(
+                          onPressed: onPlay,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _blue,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 11),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                            textStyle: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: _tsSm),
+                            minimumSize: const Size(_kMinTarget, _kMinTarget),
+                          ),
+                          icon: const Icon(Icons.add, size: 16),
+                          label: const Text('QUEUE'),
+                        ),
+                      ),
+              ]),
+            ),
+          ),
+        ),
       ),
     );
   }
 }
 
-class _SongItem extends StatefulWidget {
+class _SongItem extends StatelessWidget {
   const _SongItem({
     required this.song,
     required this.isCurrent,
@@ -1320,93 +1381,111 @@ class _SongItem extends StatefulWidget {
   final VoidCallback onQueue;
 
   @override
-  State<_SongItem> createState() => _SongItemState();
-}
-
-class _SongItemState extends State<_SongItem> {
-  bool _hovered = false;
-
-  @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(15),
-        decoration: BoxDecoration(
-          color: widget.isCurrent
-              ? const Color(0xFF1E3A5F)
-              : (_hovered ? _cardHover : _cardBg),
-          borderRadius: BorderRadius.circular(14),
-          border:
-              widget.isCurrent ? Border.all(color: _purple, width: 1.5) : null,
-        ),
-        child: Row(children: [
-          Expanded(
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                if (widget.isCurrent)
-                  const Padding(
-                      padding: EdgeInsets.only(right: 6),
-                      child: Icon(Icons.graphic_eq, color: _purple, size: 15)),
+    final Color rowBg = isCurrent
+        ? const Color(0xFF1E3A5F)
+        : isQueued
+            ? _queueGreen.withValues(alpha: 0.07)
+            : _cardBg;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: _sp8),
+      decoration: BoxDecoration(
+        color: rowBg,
+        borderRadius: BorderRadius.circular(12),
+        border: isCurrent ? Border.all(color: _purple, width: 1.5) : null,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: isQueued ? null : onQueue,
+            hoverColor: _cardHover.withValues(alpha: 0.4),
+            splashColor: Colors.white10,
+            child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: _sp12, vertical: _sp8),
+              child: Row(children: [
                 Expanded(
-                  child: Text(widget.song.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: widget.isCurrent ? _purple : Colors.white)),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          if (isCurrent)
+                            const Padding(
+                                padding: EdgeInsets.only(right: 6),
+                                child: Icon(Icons.graphic_eq,
+                                    color: _purple, size: 14)),
+                          Expanded(
+                            child: Text(song.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                    fontSize: _tsMd,
+                                    fontWeight: FontWeight.bold,
+                                    color: isCurrent
+                                        ? _purple
+                                        : isQueued
+                                            ? Colors.white70
+                                            : Colors.white)),
+                          ),
+                        ]),
+                        const SizedBox(height: _sp4),
+                        Row(
+                          children: [
+                            Icon(
+                              song.artist != null
+                                  ? Icons.person_outline
+                                  : Icons.folder_outlined,
+                              color: Colors.white38,
+                              size: 12,
+                            ),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                song.artist ?? song.folderName ?? '—',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    color: _sub, fontSize: _tsSm),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ]),
                 ),
+                const SizedBox(width: _sp8),
+                isQueued
+                    ? Semantics(
+                        label: 'Already queued',
+                        child: const Icon(Icons.check_circle,
+                            color: _queueGreen, size: 22),
+                      )
+                    : Semantics(
+                        label: 'Add to queue',
+                        button: true,
+                        child: ElevatedButton.icon(
+                          onPressed: onQueue,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _queueGreen,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                            textStyle: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: _tsSm),
+                            minimumSize: const Size(_kMinTarget, _kMinTarget),
+                          ),
+                          icon: const Icon(Icons.add, size: 16),
+                          label: const Text('QUEUE'),
+                        ),
+                      ),
               ]),
-              const Gap(4),
-              Row(
-                children: [
-                  Icon(
-                    widget.song.artist != null
-                        ? Icons.person_outline
-                        : Icons.folder_outlined,
-                    color: Colors.white38,
-                    size: 12,
-                  ),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      widget.song.artist ?? widget.song.folderName ?? '—',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: _sub, fontSize: 13),
-                    ),
-                  ),
-                ],
-              ),
-            ]),
+            ),
           ),
-          const Gap(8),
-          widget.isQueued
-              ? const Tooltip(
-                  message: 'Already queued',
-                  child: Icon(Icons.check_circle, color: _queueGreen, size: 22),
-                )
-              : ElevatedButton.icon(
-                  onPressed: widget.onQueue,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _queueGreen,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 11),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    textStyle: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 12),
-                    minimumSize: const Size(80, 40),
-                  ),
-                  icon: const Icon(Icons.add, size: 16),
-                  label: const Text('QUEUE'),
-                ),
-        ]),
+        ),
       ),
     );
   }
@@ -1615,35 +1694,43 @@ class _VideoAreaState extends ConsumerState<_VideoArea> {
                 ),
               ),
 
-            // Fullscreen toggle button (top-right); first tap shows controls, second toggles.
+            // Fullscreen toggle button (top-right); always directly toggles.
+            // Overlay visibility is controlled by cursor/pointer activity only.
             Positioned(
-              top: 20,
-              right: 20,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () {
-                  debugPrint(
-                      '[Fullscreen] button tapped: fullscreen=${widget.fullscreen}, overlayVisible=$_overlayVisible');
-                  if (!_overlayVisible) {
-                    _onCursorActivity();
-                  } else {
-                    widget.onToggle();
-                  }
-                },
-                child: AnimatedOpacity(
-                  opacity: _overlayVisible ? 1.0 : 0.3,
-                  duration: const Duration(milliseconds: 400),
-                  child: Container(
-                    width: 48,
-                    height: 48,
-                    decoration: const BoxDecoration(
-                        color: _overlayBg, shape: BoxShape.circle),
-                    child: Icon(
-                      widget.fullscreen
-                          ? Icons.fullscreen_exit
-                          : Icons.fullscreen,
-                      color: Colors.white,
-                      size: 24,
+              top: 16,
+              right: 16,
+              child: AnimatedOpacity(
+                opacity: _overlayVisible ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 300),
+                child: Semantics(
+                  label: widget.fullscreen
+                      ? 'Exit fullscreen'
+                      : 'Enter fullscreen',
+                  button: true,
+                  child: SizedBox(
+                    width: _kMinTarget,
+                    height: _kMinTarget,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {
+                        _onCursorActivity();
+                        widget.onToggle();
+                      },
+                      child: Center(
+                        child: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: const BoxDecoration(
+                              color: _overlayBg, shape: BoxShape.circle),
+                          child: Icon(
+                            widget.fullscreen
+                                ? Icons.fullscreen_exit
+                                : Icons.fullscreen,
+                            color: Colors.white,
+                            size: 22,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -1675,32 +1762,33 @@ class _NowPlayingOverlay extends ConsumerWidget {
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Colors.transparent, Color(0xF0000000)],
-          stops: [0.0, 0.45],
+          // Softer fade: transparent shelf then gradual ramp to near-black
+          colors: [Colors.transparent, Colors.transparent, Color(0xEA000000)],
+          stops: [0.0, 0.15, 1.0],
         ),
       ),
-      padding: EdgeInsets.fromLTRB(28, 48, 28, bottomPad + 24),
+      padding: EdgeInsets.fromLTRB(20, 28, 20, bottomPad + 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ── Seek bar (full width, time flanking the slider) ────────
+          // ── Seek bar ───────────────────────────────────────────────
           if (song != null) ...[
             Row(
               children: [
                 Text(_fmt(player.position),
                     style: const TextStyle(
                         color: Colors.white54,
-                        fontSize: 12,
+                        fontSize: 11,
                         fontWeight: FontWeight.w500)),
                 Expanded(
                   child: SliderTheme(
                     data: SliderTheme.of(context).copyWith(
-                      trackHeight: 4,
+                      trackHeight: 3,
                       thumbShape:
-                          const RoundSliderThumbShape(enabledThumbRadius: 7),
+                          const RoundSliderThumbShape(enabledThumbRadius: 6),
                       overlayShape:
-                          const RoundSliderOverlayShape(overlayRadius: 14),
+                          const RoundSliderOverlayShape(overlayRadius: 12),
                       activeTrackColor: _purple,
                       inactiveTrackColor: Colors.white24,
                       thumbColor: _purple,
@@ -1718,11 +1806,11 @@ class _NowPlayingOverlay extends ConsumerWidget {
                 Text(_fmt(player.duration),
                     style: const TextStyle(
                         color: Colors.white54,
-                        fontSize: 12,
+                        fontSize: 11,
                         fontWeight: FontWeight.w500)),
               ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 8),
           ],
           // ── Main row: Now Playing | Controls | Up Next ─────────────
           Row(
@@ -1736,23 +1824,22 @@ class _NowPlayingOverlay extends ConsumerWidget {
                   children: [
                     const Text('NOW PLAYING',
                         style: TextStyle(
-                            fontSize: 10,
+                            fontSize: _tsXs,
                             fontWeight: FontWeight.w700,
                             color: _purple,
-                            letterSpacing: 1.5)),
-                    const SizedBox(height: 4),
+                            letterSpacing: 1.2)),
+                    const SizedBox(height: 3),
                     Text(
                       song?.title ?? '—',
-                      maxLines: 2,
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          height: 1.2),
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold),
                     ),
                     if ((song?.artist ?? song?.folderName) != null) ...[
-                      const SizedBox(height: 3),
+                      const SizedBox(height: 2),
                       Row(
                         children: [
                           Icon(
@@ -1760,7 +1847,7 @@ class _NowPlayingOverlay extends ConsumerWidget {
                                 ? Icons.person_outline
                                 : Icons.folder_outlined,
                             color: Colors.white38,
-                            size: 12,
+                            size: 11,
                           ),
                           const SizedBox(width: 4),
                           Expanded(
@@ -1768,7 +1855,7 @@ class _NowPlayingOverlay extends ConsumerWidget {
                               song.artist ?? song.folderName!,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: _sub, fontSize: 13),
+                              style: const TextStyle(color: _sub, fontSize: 12),
                             ),
                           ),
                         ],
@@ -1779,38 +1866,38 @@ class _NowPlayingOverlay extends ConsumerWidget {
               ),
               // ── Center: Play/Pause + Next ──────────────────────
               if (song != null) ...[
-                const SizedBox(width: 24),
+                const SizedBox(width: 16),
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     _MediaButton(
                       onTap: notifier.togglePlayPause,
-                      size: 60,
+                      size: 44,
                       backgroundColor: _purple,
                       borderColor: Colors.transparent,
                       icon: player.isPlaying ? Icons.pause : Icons.play_arrow,
                       iconColor: Colors.black,
-                      iconSize: 32,
+                      iconSize: 24,
                       label: player.isPlaying ? 'PAUSE' : 'PLAY',
-                      labelColor: _purple.withOpacity(0.85),
+                      labelColor: _purple.withValues(alpha: 0.85),
                     ),
-                    const SizedBox(width: 20),
+                    const SizedBox(width: 14),
                     _MediaButton(
                       onTap: notifier.skip,
-                      size: 48,
-                      backgroundColor: Colors.white.withOpacity(0.10),
+                      size: 36,
+                      backgroundColor: Colors.white.withValues(alpha: 0.10),
                       borderColor: Colors.white38,
                       icon: Icons.skip_next,
                       iconColor: Colors.white,
-                      iconSize: 24,
+                      iconSize: 20,
                       label: 'NEXT',
                       labelColor: Colors.white38,
                       tooltip: 'Skip to next song',
                     ),
                   ],
                 ),
-                const SizedBox(width: 24),
+                const SizedBox(width: 16),
               ],
               // ── Right: UP NEXT ───────────────────────────────────
               Expanded(
@@ -1821,31 +1908,30 @@ class _NowPlayingOverlay extends ConsumerWidget {
                         children: [
                           const Text('UP NEXT',
                               style: TextStyle(
-                                  fontSize: 10,
+                                  fontSize: _tsXs,
                                   fontWeight: FontWeight.w700,
                                   color: Colors.white38,
-                                  letterSpacing: 1.5)),
-                          const SizedBox(height: 4),
+                                  letterSpacing: 1.2)),
+                          const SizedBox(height: 3),
                           Text(
                             next.song?.title ?? 'Song #${next.songId}',
-                            maxLines: 2,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.end,
                             style: const TextStyle(
                                 color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                height: 1.2),
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold),
                           ),
                           if (next.song?.artist != null ||
                               next.song?.folderName != null) ...[
-                            const SizedBox(height: 3),
+                            const SizedBox(height: 2),
                             Text(
                               next.song!.artist ?? next.song!.folderName!,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               textAlign: TextAlign.end,
-                              style: const TextStyle(color: _sub, fontSize: 13),
+                              style: const TextStyle(color: _sub, fontSize: 12),
                             ),
                           ],
                         ],
@@ -1856,7 +1942,7 @@ class _NowPlayingOverlay extends ConsumerWidget {
           ),
           // ── Volume row ────────────────────────────────────────────
           if (song != null) ...[
-            const SizedBox(height: 16),
+            const SizedBox(height: 8),
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -1870,12 +1956,12 @@ class _NowPlayingOverlay extends ConsumerWidget {
                             : Icons.volume_up,
                     color:
                         player.volume == 0 ? Colors.redAccent : Colors.white54,
-                    size: 20,
+                    size: 18,
                   ),
                 ),
                 const SizedBox(width: 6),
                 SizedBox(
-                  width: 130,
+                  width: 110,
                   child: SliderTheme(
                     data: SliderTheme.of(context).copyWith(
                       trackHeight: 2,
@@ -1893,10 +1979,10 @@ class _NowPlayingOverlay extends ConsumerWidget {
                     ),
                   ),
                 ),
-                const SizedBox(width: 6),
+                const SizedBox(width: 4),
                 Text(
                   '${(player.volume * 100).round()}%',
-                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  style: const TextStyle(color: Colors.white54, fontSize: 11),
                 ),
               ],
             ),
@@ -1916,7 +2002,11 @@ String _fmt(Duration d) {
 // ── Always-visible player control bar (normal / non-fullscreen view) ─────────
 
 class _PlayerControlBar extends ConsumerWidget {
-  const _PlayerControlBar();
+  const _PlayerControlBar({this.compact = false});
+
+  /// When true (short screens / Android landscape), collapses to a single
+  /// slim row: progress + mute icon + song title + play/pause + next.
+  final bool compact;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1928,7 +2018,7 @@ class _PlayerControlBar extends ConsumerWidget {
     final song = player.currentEntry?.song;
 
     return LayoutBuilder(builder: (context, constraints) {
-      final isNarrow = constraints.maxWidth < 420;
+      final isNarrow = compact || constraints.maxWidth < 420;
 
       return Container(
         decoration: const BoxDecoration(
@@ -1938,117 +2028,143 @@ class _PlayerControlBar extends ConsumerWidget {
             bottom: BorderSide(color: _border, width: 1),
           ),
         ),
-        padding:
-            EdgeInsets.fromLTRB(isNarrow ? 12 : 20, 8, isNarrow ? 12 : 20, 8),
+        padding: EdgeInsets.fromLTRB(isNarrow ? 12 : 20, compact ? 4 : 8,
+            isNarrow ? 12 : 20, compact ? 4 : 8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // ── Progress bar row ─────────────────────────────────────
-            Row(
-              children: [
-                Text(
-                  _fmt(player.position),
-                  style: const TextStyle(color: Colors.white54, fontSize: 11),
-                ),
-                Expanded(
-                  child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 3,
-                      thumbShape:
-                          const RoundSliderThumbShape(enabledThumbRadius: 5),
-                      overlayShape:
-                          const RoundSliderOverlayShape(overlayRadius: 12),
-                      activeTrackColor: _purple,
-                      inactiveTrackColor: Colors.white24,
-                      thumbColor: _purple,
-                    ),
-                    child: Slider(
-                      value: player.progressFraction,
-                      onChanged: (v) {
-                        if (player.duration > Duration.zero) {
-                          notifier.seek(player.duration * v);
-                        }
-                      },
-                    ),
-                  ),
-                ),
-                Text(
-                  _fmt(player.duration),
-                  style: const TextStyle(color: Colors.white54, fontSize: 11),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-
             if (isNarrow) ...[
-              // ── NARROW: single row — vol-icon | song info | play | next ──
+              // ── NARROW: 3-column — title (flex) | controls (fixed, centred) | volume (flex)
+              // Equal Expanded on both sides guarantees controls are always
+              // geometrically centred. Title truncates with ellipsis naturally.
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  // Mute toggle icon (replaces full slider on narrow)
-                  GestureDetector(
-                    onTap: () => notifier.toggleMute(),
-                    child: Icon(
-                      player.volume == 0
-                          ? Icons.volume_off
-                          : player.volume < 0.5
-                              ? Icons.volume_down
-                              : Icons.volume_up,
-                      color: player.volume == 0
-                          ? Colors.redAccent
-                          : Colors.white54,
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  // Song title (flexible)
+                  // ── Left: title + artist, truncates at midpoint ─────────
                   Expanded(
-                    child: Text(
-                      song?.title ?? '—',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          song?.title ?? '—',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: _tsBase,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        if ((song?.artist ?? song?.folderName) != null)
+                          Text(
+                            song!.artist ?? song.folderName!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style:
+                                const TextStyle(color: _sub, fontSize: _tsSm),
+                          ),
+                      ],
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  // Play / Pause
-                  GestureDetector(
-                    onTap: notifier.togglePlayPause,
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      decoration: const BoxDecoration(
-                        color: _purple,
-                        shape: BoxShape.circle,
+                  const SizedBox(width: _sp8),
+                  // ── Centre: Play/Pause + Next (fixed, never squeezed) ───
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Semantics(
+                        label: player.isPlaying ? 'Pause' : 'Play',
+                        button: true,
+                        child: GestureDetector(
+                          onTap: notifier.togglePlayPause,
+                          child: Container(
+                            width: 40,
+                            height: 40,
+                            decoration: const BoxDecoration(
+                              color: _purple,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              player.isPlaying ? Icons.pause : Icons.play_arrow,
+                              color: Colors.black,
+                              size: 22,
+                            ),
+                          ),
+                        ),
                       ),
-                      child: Icon(
-                        player.isPlaying ? Icons.pause : Icons.play_arrow,
-                        color: Colors.black,
-                        size: 24,
+                      const SizedBox(width: _sp8),
+                      Semantics(
+                        label: 'Skip to next',
+                        button: true,
+                        child: GestureDetector(
+                          onTap: notifier.skip,
+                          child: SizedBox(
+                            width: _kMinTarget,
+                            height: _kMinTarget,
+                            child: Center(
+                              child: Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.08),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white38),
+                                ),
+                                child: const Icon(
+                                  Icons.skip_next,
+                                  color: Colors.white,
+                                  size: 18,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
-                  const SizedBox(width: 10),
-                  // Next
-                  GestureDetector(
-                    onTap: notifier.skip,
-                    child: Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.08),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white38),
-                      ),
-                      child: const Icon(
-                        Icons.skip_next,
-                        color: Colors.white,
-                        size: 20,
-                      ),
+                  const SizedBox(width: _sp8),
+                  // ── Right: volume icon + slider, same flex as title ─────
+                  Expanded(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        // Volume icon — tight, no excess padding
+                        GestureDetector(
+                          onTap: () => notifier.toggleMute(),
+                          child: Icon(
+                            player.volume == 0
+                                ? Icons.volume_off
+                                : player.volume < 0.5
+                                    ? Icons.volume_down
+                                    : Icons.volume_up,
+                            color: player.volume == 0
+                                ? Colors.redAccent
+                                : Colors.white54,
+                            size: 18,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        SizedBox(
+                          width: 110,
+                          child: SliderTheme(
+                            data: SliderTheme.of(context).copyWith(
+                              trackHeight: 2,
+                              thumbShape: const RoundSliderThumbShape(
+                                  enabledThumbRadius: 4),
+                              overlayShape: const RoundSliderOverlayShape(
+                                  overlayRadius: 8),
+                              activeTrackColor: Colors.white70,
+                              inactiveTrackColor: Colors.white24,
+                              thumbColor: Colors.white,
+                            ),
+                            child: Slider(
+                              value: player.volume.clamp(0.0, 1.0),
+                              onChanged: (v) => notifier.setVolume(v),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -2067,10 +2183,10 @@ class _PlayerControlBar extends ConsumerWidget {
                         const Text(
                           'NOW PLAYING',
                           style: TextStyle(
-                            fontSize: 9,
+                            fontSize: _tsXs,
                             fontWeight: FontWeight.w700,
                             color: _purple,
-                            letterSpacing: 1.5,
+                            letterSpacing: 1.2,
                           ),
                         ),
                         const SizedBox(height: 3),
@@ -2108,13 +2224,13 @@ class _PlayerControlBar extends ConsumerWidget {
                         iconColor: Colors.black,
                         iconSize: 28,
                         label: player.isPlaying ? 'PAUSE' : 'PLAY',
-                        labelColor: _purple.withOpacity(0.8),
+                        labelColor: _purple.withValues(alpha: 0.8),
                       ),
                       const SizedBox(width: 18),
                       _MediaButton(
                         onTap: notifier.skip,
                         size: 44,
-                        backgroundColor: Colors.white.withOpacity(0.08),
+                        backgroundColor: Colors.white.withValues(alpha: 0.08),
                         borderColor: Colors.white38,
                         icon: Icons.skip_next,
                         iconColor: Colors.white,
@@ -2220,35 +2336,45 @@ class _MediaButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final button = GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          color: backgroundColor,
-          shape: BoxShape.circle,
-          border: Border.all(color: borderColor, width: 1.5),
+    final buttonWidget = SizedBox(
+      width: size,
+      height: size,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            shape: BoxShape.circle,
+            border: Border.all(color: borderColor, width: 1.5),
+          ),
+          child: Icon(icon, color: iconColor, size: iconSize),
         ),
-        child: Icon(icon, color: iconColor, size: iconSize),
       ),
     );
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        tooltip != null ? Tooltip(message: tooltip!, child: button) : button,
-        const SizedBox(height: 5),
-        Text(
-          label,
-          style: TextStyle(
-            color: labelColor,
-            fontSize: 9,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 1,
+    return Semantics(
+      label: label,
+      button: true,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          tooltip != null
+              ? Tooltip(message: tooltip!, child: buttonWidget)
+              : buttonWidget,
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(
+              color: labelColor,
+              fontSize: _tsXs,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -2261,17 +2387,21 @@ class _NoFolderPrompt extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: _sp24, vertical: 32),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          minHeight: MediaQuery.of(context).size.height * 0.4,
+        ),
         child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
               width: 64,
               height: 64,
               decoration: BoxDecoration(
-                color: _queueGreen.withOpacity(0.12),
+                color: _queueGreen.withValues(alpha: 0.12),
                 shape: BoxShape.circle,
               ),
               child: const Icon(Icons.folder_open_outlined,
@@ -2328,104 +2458,255 @@ class _NoFolderPrompt extends StatelessWidget {
   }
 }
 
+// ── Resizer handles ───────────────────────────────────────────────────────────
+
+/// Vertical divider that lets the user drag to resize the sidebar width.
+/// Shows a 3-dot grip on hover to signal its interactivity.
+class _SidebarResizer extends StatefulWidget {
+  const _SidebarResizer({required this.onDragUpdate});
+  final void Function(double dx) onDragUpdate;
+
+  @override
+  State<_SidebarResizer> createState() => _SidebarResizerState();
+}
+
+class _SidebarResizerState extends State<_SidebarResizer> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeColumn,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onHorizontalDragUpdate: (d) => widget.onDragUpdate(d.delta.dx),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: 8,
+          color: _hovered ? _border.withValues(alpha: 0.8) : _border,
+          child: _hovered
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: List.generate(
+                        3,
+                        (_) => Container(
+                              width: 3,
+                              height: 3,
+                              margin: const EdgeInsets.symmetric(vertical: 2),
+                              decoration: const BoxDecoration(
+                                  color: Colors.white38,
+                                  shape: BoxShape.circle),
+                            )),
+                  ),
+                )
+              : null,
+        ),
+      ),
+    );
+  }
+}
+
+/// Horizontal divider that lets the user drag to resize the queue panel height.
+class _QueueResizer extends StatefulWidget {
+  const _QueueResizer({required this.onDragUpdate});
+  final void Function(double dy) onDragUpdate;
+
+  @override
+  State<_QueueResizer> createState() => _QueueResizerState();
+}
+
+class _QueueResizerState extends State<_QueueResizer> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeRow,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onVerticalDragUpdate: (d) => widget.onDragUpdate(d.delta.dy),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          height: 16,
+          color: const Color(0xFF111827),
+          child: Center(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              width: _hovered ? 64 : 48,
+              height: _hovered ? 5 : 4,
+              decoration: BoxDecoration(
+                color: _hovered ? Colors.white54 : Colors.white24,
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ── Queue panel ──────────────────────────────────────────────────────────────
 
-class _QueuePanel extends ConsumerWidget {
+class _QueuePanel extends ConsumerStatefulWidget {
   const _QueuePanel({required this.queue, required this.height});
   final List<QueueEntry> queue;
   final double height;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_QueuePanel> createState() => _QueuePanelState();
+}
+
+class _QueuePanelState extends ConsumerState<_QueuePanel> {
+  // Start collapsed on narrow/short screens to save vertical space.
+  late bool _collapsed = Platform.isAndroid;
+
+  @override
+  Widget build(BuildContext context) {
     final unifiedQueue =
         ref.watch(playerProvider).valueOrNull?.unifiedQueue ?? const [];
     final totalCount = unifiedQueue.length;
+    final pad = widget.height < 160 ? 8.0 : _sp16;
+    final nextItem = unifiedQueue.isNotEmpty ? unifiedQueue.first : null;
+
+    // ── Collapsible header ──────────────────────────────────────────
+    final header = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => setState(() => _collapsed = !_collapsed),
+      child: Row(children: [
+        const Icon(Icons.queue_music_rounded, color: Colors.white54, size: 18),
+        const SizedBox(width: 6),
+        const Text('Up Next',
+            style: TextStyle(
+                fontSize: _tsBase,
+                fontWeight: FontWeight.bold,
+                color: Colors.white)),
+        if (totalCount > 0) ...[
+          const SizedBox(width: _sp8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: _purple.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(20),
+              border:
+                  Border.all(color: _purple.withValues(alpha: 0.4), width: 1),
+            ),
+            child: Text('$totalCount',
+                style: const TextStyle(
+                    color: _purple,
+                    fontSize: _tsXs,
+                    fontWeight: FontWeight.bold)),
+          ),
+        ],
+        // ── Next song teaser shown while collapsed ────────────────────
+        if (_collapsed && nextItem != null) ...[
+          const SizedBox(width: _sp12),
+          Expanded(
+            child: Text(
+              nextItem.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  color: Colors.white38,
+                  fontSize: _tsSm,
+                  fontStyle: FontStyle.italic),
+            ),
+          ),
+        ] else
+          const Spacer(),
+        AnimatedRotation(
+          turns: _collapsed ? 0.0 : 0.5,
+          duration: const Duration(milliseconds: 200),
+          child: const Icon(Icons.keyboard_arrow_up,
+              color: Colors.white54, size: 20),
+        ),
+      ]),
+    );
 
     return SafeArea(
       top: false,
       left: false,
       right: false,
       child: Container(
-        height: height,
         decoration: const BoxDecoration(
           color: _sidebarBg,
-          border: Border(top: BorderSide(color: _border, width: 2)),
+          border: Border(top: BorderSide(color: _border, width: 1)),
         ),
-        padding: EdgeInsets.all(height < 160 ? 10 : 20),
-        child: ClipRect(
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              const Icon(Icons.queue_music_rounded,
-                  color: Colors.white54, size: 20),
-              const SizedBox(width: 8),
-              const Text('Up Next',
-                  style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white)),
-              if (totalCount > 0) ...[
-                const Gap(10),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: _purple.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(20),
-                    border:
-                        Border.all(color: _purple.withOpacity(0.4), width: 1),
+        padding: EdgeInsets.all(pad),
+        child: Builder(builder: (ctx) {
+          // Account for SafeArea bottom inset (macOS dock, Android nav bar, etc.)
+          // so the animated body height never overflows.
+          final safeBottom = MediaQuery.paddingOf(ctx).bottom;
+          // 36px = generous header height that covers any font/density combo.
+          final bodyH =
+              (widget.height - safeBottom - pad * 2 - 36).clamp(0.0, 9999.0);
+
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              header,
+              // AnimatedContainer height: 0 ↔ bodyH drives the collapse.
+              // No Expanded wrapper — tight parent constraints must NOT be applied
+              // here or the explicit height is ignored by the layout engine.
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeInOut,
+                height: _collapsed ? 0 : bodyH,
+                clipBehavior: Clip.hardEdge,
+                decoration: const BoxDecoration(),
+                child: Padding(
+                  padding: const EdgeInsets.only(top: _sp8),
+                  child: SizedBox(
+                    height: bodyH - _sp8,
+                    child: totalCount == 0
+                        ? const Center(
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.queue_music_rounded,
+                                      size: 36, color: Colors.white12),
+                                  SizedBox(height: 10),
+                                  Text('Queue is empty',
+                                      style: TextStyle(
+                                          color: Colors.white38,
+                                          fontSize: _tsBase,
+                                          fontWeight: FontWeight.w600)),
+                                  SizedBox(height: 4),
+                                  Text('Add songs from the list on the left',
+                                      style: TextStyle(
+                                          color: Colors.white24,
+                                          fontSize: _tsSm),
+                                      textAlign: TextAlign.center),
+                                ],
+                              ),
+                            ),
+                          )
+                        : ListView.builder(
+                            itemCount: unifiedQueue.length,
+                            itemBuilder: (_, i) {
+                              final item = unifiedQueue[i];
+                              return _QueueItem(
+                                label: item.title,
+                                position: i + 1,
+                                isYoutube: item.isYoutube,
+                                onRemove: () => ref
+                                    .read(playerProvider.notifier)
+                                    .removeQueueItemAt(i),
+                              );
+                            },
+                          ),
                   ),
-                  child: Text('$totalCount',
-                      style: const TextStyle(
-                          color: _purple,
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold)),
                 ),
-              ],
-            ]),
-            const Gap(12),
-            Expanded(
-              child: totalCount == 0
-                  ? Center(
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.queue_music_rounded,
-                                size: 36, color: Colors.white12),
-                            const SizedBox(height: 10),
-                            const Text('Queue is empty',
-                                style: TextStyle(
-                                    color: Colors.white38,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600)),
-                            const SizedBox(height: 4),
-                            const Text('Add songs from the list on the left',
-                                style: TextStyle(
-                                    color: Colors.white24, fontSize: 12),
-                                textAlign: TextAlign.center),
-                          ],
-                        ),
-                      ),
-                    )
-                  : ListView.builder(
-                      itemCount: unifiedQueue.length,
-                      itemBuilder: (_, i) {
-                        final item = unifiedQueue[i];
-                        return _QueueItem(
-                          label: item.title,
-                          position: i + 1,
-                          isYoutube: item.isYoutube,
-                          onRemove: () => ref
-                              .read(playerProvider.notifier)
-                              .removeQueueItemAt(i),
-                        );
-                      },
-                    ),
-            ),
-          ]),
-        ),
+              ),
+            ],
+          );
+        }),
       ),
     );
   }
@@ -2445,155 +2726,239 @@ class _QueueItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accentColor = isYoutube ? _blue : _queueGreen;
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      margin: const EdgeInsets.only(bottom: _sp8),
       decoration: BoxDecoration(
-          color: _cardBg, borderRadius: BorderRadius.circular(12)),
-      child: Row(children: [
-        // ── Source badge ────────────────────────────────────────────
-        Container(
-          width: 22,
-          height: 22,
-          margin: const EdgeInsets.only(right: 10),
-          decoration: BoxDecoration(
-            color: isYoutube
-                ? const Color(0xFF1D4ED8).withValues(alpha: 0.3)
-                : _queueGreen.withValues(alpha: 0.2),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Icon(
-            isYoutube ? Icons.language : Icons.music_note,
-            size: 13,
-            color: isYoutube ? const Color(0xFF60A5FA) : _queueGreen,
-          ),
-        ),
-        // ── Position ────────────────────────────────────────────────
-        Text('$position. ',
-            style: const TextStyle(color: Colors.white38, fontSize: 13)),
-        // ── Title ───────────────────────────────────────────────────
-        Expanded(
-          child: Text(label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w500,
-                  fontSize: 14)),
-        ),
-        const Gap(8),
-        if (onRemove != null)
-          GestureDetector(
-            onTap: onRemove,
-            child: Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.06),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(Icons.close, color: Colors.white54, size: 16),
+          color: _cardBg, borderRadius: BorderRadius.circular(10)),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            hoverColor: _cardHover.withValues(alpha: 0.4),
+            splashColor: Colors.white10,
+            onTap: null,
+            child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: _sp12, vertical: _sp8),
+              child: Row(children: [
+                // ── Source badge ──────────────────────────────────────────
+                Container(
+                  width: 22,
+                  height: 22,
+                  margin: const EdgeInsets.only(right: _sp8),
+                  decoration: BoxDecoration(
+                    color: accentColor.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Icon(
+                    isYoutube ? Icons.language : Icons.music_note,
+                    size: 12,
+                    color: accentColor,
+                  ),
+                ),
+                // ── Position ──────────────────────────────────────────────
+                Text('$position. ',
+                    style: const TextStyle(
+                        color: Colors.white38, fontSize: _tsSm)),
+                // ── Title ─────────────────────────────────────────────────
+                Expanded(
+                  child: Text(label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w500,
+                          fontSize: _tsBase)),
+                ),
+                if (onRemove != null)
+                  // Min 44×44 touch target wrapping a smaller visual
+                  Semantics(
+                    label: 'Remove from queue',
+                    button: true,
+                    child: SizedBox(
+                      width: _kMinTarget,
+                      height: _kMinTarget,
+                      child: GestureDetector(
+                        onTap: onRemove,
+                        child: Center(
+                          child: Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.06),
+                              borderRadius: BorderRadius.circular(7),
+                            ),
+                            child: const Icon(Icons.close,
+                                color: Colors.white54, size: 14),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ]),
             ),
           ),
-      ]),
+        ),
+      ),
     );
   }
 }
 
 // ── Narrow layout tab bar ──────────────────────────────────────────────────────
-class _NarrowTabBar extends StatelessWidget {
-  const _NarrowTabBar({
-    required this.activeTab,
-    required this.onTab,
-    required this.isPlaying,
-  });
+// ── Phone chip tab bar ────────────────────────────────────────────────────────
 
+class _PhoneChipBar extends StatelessWidget {
+  const _PhoneChipBar({
+    required this.activeTab,
+    required this.queueCount,
+    required this.onTab,
+  });
   final int activeTab;
+  final int queueCount;
   final ValueChanged<int> onTab;
-  final bool isPlaying;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       color: _sidebarBg,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      child: Row(
         children: [
-          Row(
-            children: [
-              _Tab(
-                label: 'Songs',
-                icon: Icons.library_music_outlined,
-                selected: activeTab == 0,
-                onTap: () => onTab(0),
-              ),
-              _Tab(
-                label: 'Now Playing',
-                icon: isPlaying
-                    ? Icons.play_circle_filled
-                    : Icons.play_circle_outline,
-                selected: activeTab == 1,
-                onTap: () => onTab(1),
-              ),
-            ],
+          _Chip(
+            label: 'Songs',
+            icon: Icons.library_music_outlined,
+            selected: activeTab == 0,
+            onTap: () => onTab(0),
           ),
-          const Divider(height: 1, thickness: 1, color: _border),
+          const SizedBox(width: 8),
+          _Chip(
+            label: queueCount > 0 ? 'Queue  $queueCount' : 'Queue',
+            icon: Icons.queue_music_rounded,
+            selected: activeTab == 1,
+            onTap: () => onTab(1),
+            badge: queueCount,
+          ),
         ],
       ),
     );
   }
 }
 
-class _Tab extends StatelessWidget {
-  const _Tab({
+class _Chip extends StatelessWidget {
+  const _Chip({
     required this.label,
     required this.icon,
     required this.selected,
     required this.onTap,
+    this.badge = 0,
   });
-
   final String label;
   final IconData icon;
   final bool selected;
   final VoidCallback onTap;
+  final int badge;
 
   @override
   Widget build(BuildContext context) {
-    const inactive = Color(0xFF9CA3AF);
-
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 20, color: selected ? _purple : inactive),
-              const SizedBox(height: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                  color: selected ? _purple : inactive,
-                ),
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected
+              ? _purple.withValues(alpha: 0.18)
+              : Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected ? _purple.withValues(alpha: 0.6) : Colors.white12,
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: selected ? _purple : Colors.white38),
+            const SizedBox(width: 6),
+            Text(
+              badge > 0 ? label.split('  ').first : label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                color: selected ? _purple : Colors.white38,
               ),
-              const SizedBox(height: 4),
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                height: 2,
-                width: selected ? 32 : 0,
+            ),
+            if (badge > 0) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                 decoration: BoxDecoration(
-                  color: _purple,
-                  borderRadius: BorderRadius.circular(1),
+                  color: selected ? _purple : Colors.white24,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '$badge',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: selected ? Colors.black : Colors.white,
+                  ),
                 ),
               ),
             ],
-          ),
+          ],
         ),
       ),
+    );
+  }
+}
+
+// ── Phone queue list (for narrow layout Tab 1) ────────────────────────────────
+
+class _PhoneQueueList extends ConsumerWidget {
+  const _PhoneQueueList({required this.queue});
+  final List<QueueEntry> queue;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final unifiedQueue =
+        ref.watch(playerProvider).valueOrNull?.unifiedQueue ?? const [];
+
+    if (unifiedQueue.isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.queue_music_rounded, size: 48, color: Colors.white12),
+            SizedBox(height: 12),
+            Text('Queue is empty',
+                style: TextStyle(
+                    color: Colors.white38,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600)),
+            SizedBox(height: 6),
+            Text('Add songs from the Songs tab',
+                style: TextStyle(color: Colors.white24, fontSize: 12)),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 24),
+      itemCount: unifiedQueue.length,
+      itemBuilder: (_, i) {
+        final item = unifiedQueue[i];
+        return _QueueItem(
+          label: item.title,
+          position: i + 1,
+          isYoutube: item.isYoutube,
+          onRemove: () =>
+              ref.read(playerProvider.notifier).removeQueueItemAt(i),
+        );
+      },
     );
   }
 }

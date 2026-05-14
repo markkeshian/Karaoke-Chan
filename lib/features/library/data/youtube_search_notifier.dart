@@ -77,6 +77,12 @@ class YoutubeSearchNotifier extends Notifier<YoutubeSearchState> {
   }
 
   void clear() => state = const YoutubeSearchState();
+
+  Future<void> retryLast() async {
+    final lastQuery = state.query;
+    if (lastQuery.trim().isEmpty) return;
+    await search(lastQuery);
+  }
 }
 
 // ── Provider ──────────────────────────────────────────────────────────────────
