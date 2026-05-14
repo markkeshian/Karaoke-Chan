@@ -61,6 +61,11 @@ jobs:
       - name: Set up Visual Studio
         uses: microsoft/setup-msbuild@v2
 
+      - name: Configure CMake generator
+        run: |
+          cmake --version
+          echo "CMAKE_GENERATOR=Visual Studio 17 2022" >> $env:GITHUB_ENV
+
       - name: Build Windows
         run: flutter build windows --release
 
