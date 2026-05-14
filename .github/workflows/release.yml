@@ -58,20 +58,25 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Install Ninja and Visual Studio Build Tools
-        run: choco install ninja -y
-
-      - name: Set up Visual Studio
-        uses: microsoft/setup-msbuild@v2
-
-      - name: Build Windows
+      - name: Patch Flutter CMake generator
         shell: pwsh
         run: |
-          $vsPath = & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          Write-Host "VS Path: $vsPath"
-          $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
-          Write-Host "vcvars: $vcvars"
-          cmd /c "`"$vcvars`" && flutter build windows --release"
+          $flutterRoot = flutter --version --machine | ConvertFrom-Json | Select-Object -ExpandProperty flutterRoot
+          if (-not $flutterRoot) {
+            $flutterRoot = (Get-Command flutter).Source | Split-Path | Split-Path
+          }
+          Write-Host "Flutter root: $flutterRoot"
+          $cmakeFile = Join-Path $flutterRoot "packages\flutter_tools\lib\src\windows\cmake_tools.dart"
+          if (Test-Path $cmakeFile) {
+            (Get-Content $cmakeFile) -replace 'Visual Studio 16 2019', 'Visual Studio 17 2022' | Set-Content $cmakeFile
+            Write-Host "Patched cmake_tools.dart"
+          } else {
+            Write-Host "File not found: $cmakeFile"
+            Get-ChildItem -Recurse -Filter "cmake_tools.dart" $flutterRoot | Select-Object FullName
+          }
+
+      - name: Build Windows
+        run: flutter build windows --release
 
       - name: Build MSIX
         run: dart run msix:create
