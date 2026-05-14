@@ -60,6 +60,8 @@ jobs:
 
       - name: Build Windows
         run: flutter build windows --release
+        env:
+          CMAKE_GENERATOR: "Visual Studio 17 2022"
 
       - name: Zip Windows build
         run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath karaoke-chan-windows.zip
@@ -94,7 +96,7 @@ jobs:
         run: flutter build macos --release
 
       - name: Zip macOS build
-        run: zip -r karaoke-chan-macos.zip build/macos/Build/Products/Release/karaoke_chan.app
+        run: zip -r karaoke-chan-macos.zip "build/macos/Build/Products/Release/Karaoke-Chan.app"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
