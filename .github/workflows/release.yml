@@ -58,16 +58,17 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Install Ninja and Visual Studio Build Tools
+        run: choco install ninja -y
+
       - name: Set up Visual Studio
         uses: microsoft/setup-msbuild@v2
 
-      - name: Configure CMake generator
-        run: |
-          cmake --version
-          echo "CMAKE_GENERATOR=Visual Studio 17 2022" >> $env:GITHUB_ENV
-
       - name: Build Windows
-        run: flutter build windows --release
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          flutter build windows --release
 
       - name: Build MSIX
         run: dart run msix:create
