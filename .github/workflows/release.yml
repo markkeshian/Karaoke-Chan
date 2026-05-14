@@ -43,7 +43,7 @@ jobs:
 
   build-windows:
     name: Build Windows
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -57,23 +57,6 @@ jobs:
 
       - name: Install dependencies
         run: flutter pub get
-
-      - name: Patch Flutter CMake generator
-        shell: pwsh
-        run: |
-          $flutterRoot = flutter --version --machine | ConvertFrom-Json | Select-Object -ExpandProperty flutterRoot
-          if (-not $flutterRoot) {
-            $flutterRoot = (Get-Command flutter).Source | Split-Path | Split-Path
-          }
-          Write-Host "Flutter root: $flutterRoot"
-          $cmakeFile = Join-Path $flutterRoot "packages\flutter_tools\lib\src\windows\cmake_tools.dart"
-          if (Test-Path $cmakeFile) {
-            (Get-Content $cmakeFile) -replace 'Visual Studio 16 2019', 'Visual Studio 17 2022' | Set-Content $cmakeFile
-            Write-Host "Patched cmake_tools.dart"
-          } else {
-            Write-Host "File not found: $cmakeFile"
-            Get-ChildItem -Recurse -Filter "cmake_tools.dart" $flutterRoot | Select-Object FullName
-          }
 
       - name: Build Windows
         run: flutter build windows --release
