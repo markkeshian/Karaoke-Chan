@@ -118,7 +118,8 @@ jobs:
           body: |
             ## What's new in ${{ github.ref_name }}
 
-            - See commit history for changes.
+            - fix: bundle sqlite3.dll so the app no longer crashes at launch on Windows
+            - fix: guard `openAppSettings()` so it only fires on Android
 
             ## Installation
 

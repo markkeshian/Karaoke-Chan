@@ -9,7 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gap/gap.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:permission_handler/permission_handler.dart' show openAppSettings;
 import 'package:karaoke_chan/core/services/youtube_service.dart';
 import 'package:karaoke_chan/features/library/data/library_notifier.dart';
 import 'package:karaoke_chan/features/library/data/song_model.dart';
@@ -483,7 +483,9 @@ class _ScanErrorView extends ConsumerWidget {
           const Gap(32),
           if (isPerm)
             ElevatedButton.icon(
-              onPressed: () => openAppSettings(),
+              onPressed: () {
+                if (Platform.isAndroid) openAppSettings();
+              },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.orangeAccent,
                 foregroundColor: Colors.black,
