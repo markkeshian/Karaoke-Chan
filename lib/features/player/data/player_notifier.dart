@@ -26,12 +26,41 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
 
   /// Pre-fetched stream URLs keyed by videoId — populated when a YouTube
   /// video is queued so it's ready by the time it's their turn to play.
+  /// YouTube URLs expire in ~6 hours; we evict after 4 hours to be safe.
   final Map<String, String> _streamUrlCache = {};
+  final Map<String, DateTime> _streamUrlCachedAt = {};
+  static const _cacheMaxAge = Duration(hours: 4);
+
+  String? _getCachedUrl(String videoId) {
+    final url = _streamUrlCache[videoId];
+    final cachedAt = _streamUrlCachedAt[videoId];
+    if (url == null || cachedAt == null) return null;
+    if (DateTime.now().difference(cachedAt) > _cacheMaxAge) {
+      _streamUrlCache.remove(videoId);
+      _streamUrlCachedAt.remove(videoId);
+      return null;
+    }
+    return url;
+  }
+
+  void _setCachedUrl(String videoId, String url) {
+    _streamUrlCache[videoId] = url;
+    _streamUrlCachedAt[videoId] = DateTime.now();
+  }
+
+  void _evictCachedUrl(String videoId) {
+    _streamUrlCache.remove(videoId);
+    _streamUrlCachedAt.remove(videoId);
+  }
 
   /// Debounce timer for the paused state on YouTube songs — prevents brief
   /// playing=false events from network glitches (e.g. ffurl_read) from
   /// incorrectly flipping the play/pause button.
   Timer? _ytPauseDebounce;
+
+  /// Set to true when the user explicitly calls pause() / togglePlayPause().
+  /// When true, the YouTube debounce is skipped so the icon updates instantly.
+  bool _userPaused = false;
 
   @override
   Future<KaraokePlayerState> build() async {
@@ -65,7 +94,13 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
         // For YouTube songs, debounce the paused state — network glitches
         // (e.g. ffurl_read) fire playing=false briefly but the player recovers
         // on its own. Only commit to paused after 600ms of sustained false.
+        // Exception: if the user explicitly paused, update the icon instantly.
         if (s.currentEntry?.songId == -1) {
+          if (_userPaused) {
+            // Intentional pause — skip debounce, update icon immediately.
+            _userPaused = false;
+            return s.copyWith(status: PlayerStatus.paused);
+          }
           _ytPauseDebounce?.cancel();
           _ytPauseDebounce = Timer(const Duration(milliseconds: 600), () {
             if (!_player.state.playing && !_disposed) {
@@ -157,7 +192,7 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
         .read(youtubeServiceProvider)
         .getBestStreamUrl(video.videoId)
         .then((url) {
-      if (url != null) _streamUrlCache[video.videoId] = url;
+      if (url != null) _setCachedUrl(video.videoId, url);
     }).catchError((_) {
       // Ignore pre-fetch errors — playYoutube will retry on-demand.
     });
@@ -185,7 +220,7 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
     _update((s) => s.copyWith(unifiedQueue: List.unmodifiable(_orderedQueue)));
     // Evict any pre-fetched stream URL so we don't hold stale data.
     if (item.isYoutube && item.youtubeVideo != null) {
-      _streamUrlCache.remove(item.youtubeVideo!.videoId);
+      _evictCachedUrl(item.youtubeVideo!.videoId);
     }
     if (!item.isYoutube && item.dbEntryId != null) {
       await ref.read(queueNotifierProvider.notifier).remove(item.dbEntryId!);
@@ -231,7 +266,9 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
     try {
       // Use pre-fetched URL from cache if available — but skip cache on retry
       // since the cached URL may be expired (caused the error in the first place).
-      final cached = isRetry ? null : _streamUrlCache.remove(video.videoId);
+      final cached = isRetry ? null : _getCachedUrl(video.videoId);
+      if (cached == null)
+        _evictCachedUrl(video.videoId); // clean up stale entry
       final streamUrl = cached ??
           await ref
               .read(youtubeServiceProvider)
@@ -267,8 +304,18 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   }
 
   Future<void> play() async => _player.play();
-  Future<void> pause() async => _player.pause();
-  Future<void> togglePlayPause() async => _player.playOrPause();
+
+  Future<void> pause() async {
+    _userPaused = true;
+    await _player.pause();
+  }
+
+  Future<void> togglePlayPause() async {
+    // If currently playing, this will pause — mark it as intentional so the
+    // YouTube debounce is skipped and the icon flips instantly.
+    if (_player.state.playing) _userPaused = true;
+    await _player.playOrPause();
+  }
 
   /// Immediately stops playback and resets to idle without advancing the queue.
   /// Used by the full app reset flow.

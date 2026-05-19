@@ -9,7 +9,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gap/gap.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:permission_handler/permission_handler.dart' show openAppSettings;
+import 'package:permission_handler/permission_handler.dart'
+    show openAppSettings;
 import 'package:karaoke_chan/core/services/youtube_service.dart';
 import 'package:karaoke_chan/features/library/data/library_notifier.dart';
 import 'package:karaoke_chan/features/library/data/song_model.dart';
@@ -123,12 +124,18 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
     }
     if (key == LogicalKeyboardKey.space ||
         key == LogicalKeyboardKey.mediaPlayPause) {
+      final player =
+          ref.read(playerProvider).valueOrNull ?? const KaraokePlayerState();
+      if (player.isLoading) return true; // swallow — don't act while loading
       ref.read(playerProvider.notifier).togglePlayPause();
       return true;
     }
     if (key == LogicalKeyboardKey.mediaTrackNext ||
         key == LogicalKeyboardKey.arrowRight &&
             HardwareKeyboard.instance.isMetaPressed) {
+      final player =
+          ref.read(playerProvider).valueOrNull ?? const KaraokePlayerState();
+      if (player.isLoading) return true; // swallow — don't act while loading
       ref.read(playerProvider.notifier).skip();
       return true;
     }
@@ -1874,19 +1881,24 @@ class _NowPlayingOverlay extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     _MediaButton(
-                      onTap: notifier.togglePlayPause,
+                      onTap: player.isLoading ? null : notifier.togglePlayPause,
+                      isLoading: player.isLoading,
                       size: 44,
                       backgroundColor: _purple,
                       borderColor: Colors.transparent,
                       icon: player.isPlaying ? Icons.pause : Icons.play_arrow,
                       iconColor: Colors.black,
                       iconSize: 24,
-                      label: player.isPlaying ? 'PAUSE' : 'PLAY',
+                      label: player.isLoading
+                          ? 'LOADING'
+                          : player.isPlaying
+                              ? 'PAUSE'
+                              : 'PLAY',
                       labelColor: _purple.withValues(alpha: 0.85),
                     ),
                     const SizedBox(width: 14),
                     _MediaButton(
-                      onTap: notifier.skip,
+                      onTap: player.isLoading ? null : notifier.skip,
                       size: 36,
                       backgroundColor: Colors.white.withValues(alpha: 0.10),
                       borderColor: Colors.white38,
@@ -1895,7 +1907,7 @@ class _NowPlayingOverlay extends ConsumerWidget {
                       iconSize: 20,
                       label: 'NEXT',
                       labelColor: Colors.white38,
-                      tooltip: 'Skip to next song',
+                      tooltip: player.isLoading ? null : 'Skip to next song',
                     ),
                   ],
                 ),
@@ -2075,22 +2087,42 @@ class _PlayerControlBar extends ConsumerWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Semantics(
-                        label: player.isPlaying ? 'Pause' : 'Play',
+                        label: player.isLoading
+                            ? 'Loading'
+                            : player.isPlaying
+                                ? 'Pause'
+                                : 'Play',
                         button: true,
+                        enabled: !player.isLoading,
                         child: GestureDetector(
-                          onTap: notifier.togglePlayPause,
+                          onTap: player.isLoading
+                              ? null
+                              : notifier.togglePlayPause,
                           child: Container(
                             width: 40,
                             height: 40,
-                            decoration: const BoxDecoration(
-                              color: _purple,
+                            decoration: BoxDecoration(
+                              color: player.isLoading
+                                  ? _purple.withValues(alpha: 0.3)
+                                  : _purple,
                               shape: BoxShape.circle,
                             ),
-                            child: Icon(
-                              player.isPlaying ? Icons.pause : Icons.play_arrow,
-                              color: Colors.black,
-                              size: 22,
-                            ),
+                            child: player.isLoading
+                                ? Padding(
+                                    padding: const EdgeInsets.all(10),
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color:
+                                          Colors.black.withValues(alpha: 0.4),
+                                    ),
+                                  )
+                                : Icon(
+                                    player.isPlaying
+                                        ? Icons.pause
+                                        : Icons.play_arrow,
+                                    color: Colors.black,
+                                    size: 22,
+                                  ),
                           ),
                         ),
                       ),
@@ -2098,8 +2130,9 @@ class _PlayerControlBar extends ConsumerWidget {
                       Semantics(
                         label: 'Skip to next',
                         button: true,
+                        enabled: !player.isLoading,
                         child: GestureDetector(
-                          onTap: notifier.skip,
+                          onTap: player.isLoading ? null : notifier.skip,
                           child: SizedBox(
                             width: _kMinTarget,
                             height: _kMinTarget,
@@ -2108,13 +2141,18 @@ class _PlayerControlBar extends ConsumerWidget {
                                 width: 32,
                                 height: 32,
                                 decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.08),
+                                  color: Colors.white.withValues(
+                                      alpha: player.isLoading ? 0.03 : 0.08),
                                   shape: BoxShape.circle,
-                                  border: Border.all(color: Colors.white38),
+                                  border: Border.all(
+                                      color: Colors.white.withValues(
+                                          alpha:
+                                              player.isLoading ? 0.15 : 0.56)),
                                 ),
-                                child: const Icon(
+                                child: Icon(
                                   Icons.skip_next,
-                                  color: Colors.white,
+                                  color: Colors.white.withValues(
+                                      alpha: player.isLoading ? 0.25 : 1.0),
                                   size: 18,
                                 ),
                               ),
@@ -2218,19 +2256,25 @@ class _PlayerControlBar extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       _MediaButton(
-                        onTap: notifier.togglePlayPause,
+                        onTap:
+                            player.isLoading ? null : notifier.togglePlayPause,
+                        isLoading: player.isLoading,
                         size: 54,
                         backgroundColor: _purple,
                         borderColor: Colors.transparent,
                         icon: player.isPlaying ? Icons.pause : Icons.play_arrow,
                         iconColor: Colors.black,
                         iconSize: 28,
-                        label: player.isPlaying ? 'PAUSE' : 'PLAY',
+                        label: player.isLoading
+                            ? 'LOADING'
+                            : player.isPlaying
+                                ? 'PAUSE'
+                                : 'PLAY',
                         labelColor: _purple.withValues(alpha: 0.8),
                       ),
                       const SizedBox(width: 18),
                       _MediaButton(
-                        onTap: notifier.skip,
+                        onTap: player.isLoading ? null : notifier.skip,
                         size: 44,
                         backgroundColor: Colors.white.withValues(alpha: 0.08),
                         borderColor: Colors.white38,
@@ -2239,7 +2283,7 @@ class _PlayerControlBar extends ConsumerWidget {
                         iconSize: 22,
                         label: 'NEXT',
                         labelColor: Colors.white38,
-                        tooltip: 'Skip to next song',
+                        tooltip: player.isLoading ? null : 'Skip to next song',
                       ),
                     ],
                   ),
@@ -2311,6 +2355,9 @@ class _PlayerControlBar extends ConsumerWidget {
 /// A single circular media button with an icon and a small text label below.
 /// Both play and next use this widget so they always have the same structure
 /// and height — guaranteeing perfect vertical alignment in their parent Row.
+///
+/// Pass [onTap] = null to disable the button (e.g. while a stream is loading).
+/// A disabled button is visually dimmed and shows a lock/loading indicator.
 class _MediaButton extends StatelessWidget {
   const _MediaButton({
     required this.onTap,
@@ -2323,9 +2370,11 @@ class _MediaButton extends StatelessWidget {
     required this.label,
     required this.labelColor,
     this.tooltip,
+    this.isLoading = false,
   });
 
-  final VoidCallback onTap;
+  /// Null = disabled (blocks interaction and dims the button).
+  final VoidCallback? onTap;
   final double size;
   final Color backgroundColor;
   final Color borderColor;
@@ -2336,22 +2385,42 @@ class _MediaButton extends StatelessWidget {
   final Color labelColor;
   final String? tooltip;
 
+  /// When true, shows a small spinner inside the button instead of the icon.
+  final bool isLoading;
+
+  bool get _disabled => onTap == null;
+
   @override
   Widget build(BuildContext context) {
+    final effectiveBg =
+        _disabled ? backgroundColor.withValues(alpha: 0.3) : backgroundColor;
+    final effectiveIconColor =
+        _disabled ? iconColor.withValues(alpha: 0.3) : iconColor;
+    final effectiveBorderColor =
+        _disabled ? borderColor.withValues(alpha: 0.2) : borderColor;
+
     final buttonWidget = SizedBox(
       width: size,
       height: size,
       child: GestureDetector(
-        onTap: onTap,
+        onTap: _disabled ? null : onTap,
         child: Container(
           width: size,
           height: size,
           decoration: BoxDecoration(
-            color: backgroundColor,
+            color: effectiveBg,
             shape: BoxShape.circle,
-            border: Border.all(color: borderColor, width: 1.5),
+            border: Border.all(color: effectiveBorderColor, width: 1.5),
           ),
-          child: Icon(icon, color: iconColor, size: iconSize),
+          child: isLoading
+              ? Padding(
+                  padding: EdgeInsets.all(size * 0.22),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: effectiveIconColor,
+                  ),
+                )
+              : Icon(icon, color: effectiveIconColor, size: iconSize),
         ),
       ),
     );
@@ -2359,17 +2428,18 @@ class _MediaButton extends StatelessWidget {
     return Semantics(
       label: label,
       button: true,
+      enabled: !_disabled,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          tooltip != null
+          tooltip != null && !_disabled
               ? Tooltip(message: tooltip!, child: buttonWidget)
               : buttonWidget,
           const SizedBox(height: 4),
           Text(
             label,
             style: TextStyle(
-              color: labelColor,
+              color: _disabled ? labelColor.withValues(alpha: 0.3) : labelColor,
               fontSize: _tsXs,
               fontWeight: FontWeight.w700,
               letterSpacing: 0.8,

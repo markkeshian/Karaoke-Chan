@@ -50,32 +50,36 @@ class YoutubeService {
       '?key=$_innertubeKey&prettyPrint=false',
     );
 
-    final response = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
-            'AppleWebKit/537.36 (KHTML, like Gecko) '
-            'Chrome/124.0.0.0 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Origin': 'https://www.youtube.com',
-        'Referer': 'https://www.youtube.com/',
-        'X-Youtube-Client-Name': '1',
-        'X-Youtube-Client-Version': _clientVersion,
-      },
-      body: jsonEncode({
-        'context': {
-          'client': {
-            'clientName': _clientName,
-            'clientVersion': _clientVersion,
-            'hl': 'en',
-            'gl': 'US',
+    final response = await http
+        .post(
+          uri,
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/124.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Origin': 'https://www.youtube.com',
+            'Referer': 'https://www.youtube.com/',
+            'X-Youtube-Client-Name': '1',
+            'X-Youtube-Client-Version': _clientVersion,
           },
-        },
-        'query': query,
-        'params': _searchParams,
-      }),
-    );
+          body: jsonEncode({
+            'context': {
+              'client': {
+                'clientName': _clientName,
+                'clientVersion': _clientVersion,
+                'hl': 'en',
+                'gl': 'US',
+              },
+            },
+            'query': query,
+            'params': _searchParams,
+          }),
+        )
+        .timeout(const Duration(seconds: 15),
+            onTimeout: () => throw Exception(
+                'YouTube search timed out. Check your internet connection.'));
 
     if (response.statusCode != 200) {
       throw Exception('YouTube search failed (HTTP ${response.statusCode})');
@@ -161,7 +165,8 @@ class YoutubeService {
       final manifest = await _yt.videos.streamsClient.getManifest(
         videoId,
         ytClients: [YoutubeApiClient.ios, YoutubeApiClient.androidVr],
-      );
+      ).timeout(const Duration(seconds: 20),
+          onTimeout: () => throw Exception('Stream URL resolution timed out.'));
 
       // 1. Prefer muxed (video+audio) — best for karaoke.
       if (manifest.muxed.isNotEmpty) {
