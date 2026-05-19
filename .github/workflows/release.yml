@@ -118,10 +118,9 @@ jobs:
           body: |
             ## What's new in ${{ github.ref_name }}
 
-            - fix: disable play/pause and next buttons while a stream is still loading (prevents queue race condition on slow internet)
-            - fix: pause icon now updates instantly on YouTube songs (was delayed ~600ms due to debounce)
-            - fix: folder scanner no longer crashes on access-denied subdirectories
-            - fix: YouTube search and stream resolution now have network timeouts
+            - ux: play/pause and next buttons are now always clickable — tapping next while a stream is loading cancels the in-flight request immediately and skips to the next song
+            - ux: tapping the spinner (play button while loading) now cancels the load and returns to idle instead of being blocked
+            - ux: keyboard shortcuts (Space, Cmd+→) work immediately during loading
 
             ## Installation
 

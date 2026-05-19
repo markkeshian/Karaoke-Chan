@@ -62,6 +62,11 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   /// When true, the YouTube debounce is skipped so the icon updates instantly.
   bool _userPaused = false;
 
+  /// Cancellation token for in-flight YouTube stream resolution.
+  /// Incremented each time a new load starts; checked after the async gap
+  /// so a stale resolution result is discarded if skip() was called.
+  int _loadToken = 0;
+
   @override
   Future<KaraokePlayerState> build() async {
     _disposed = false;
@@ -234,6 +239,11 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
       {bool isRetry = false}) async {
     if (_disposed) return;
 
+    // Stamp this load with a token. If skip() is called before the async
+    // stream URL resolves, the token is incremented and this call will see
+    // the mismatch and silently discard its result.
+    final myToken = ++_loadToken;
+
     // Show loading state immediately with a synthetic entry so the UI
     // can display the title while the stream URL is being resolved.
     final syntheticSong = Song(
@@ -273,9 +283,14 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
           await ref
               .read(youtubeServiceProvider)
               .getBestStreamUrl(video.videoId);
+
+      // Discard result if skip() was called while we were waiting.
+      if (_loadToken != myToken || _disposed) return;
+
       if (streamUrl == null) throw Exception('No playable stream found.');
       await _player.open(Media(streamUrl));
     } catch (e) {
+      if (_loadToken != myToken || _disposed) return;
       _update((s) => s.copyWith(
             status: PlayerStatus.error,
             errorMessage: e.toString(),
@@ -311,6 +326,9 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   }
 
   Future<void> togglePlayPause() async {
+    // Spinner is visual-only during loading — play button is for play/pause,
+    // not skip. Use Next (skip) if you want to move on.
+    if (state.value?.isLoading == true) return;
     // If currently playing, this will pause — mark it as intentional so the
     // YouTube debounce is skipped and the icon flips instantly.
     if (_player.state.playing) _userPaused = true;
@@ -357,6 +375,8 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   }
 
   Future<void> skip() async {
+    // Cancel any in-flight YouTube stream resolution immediately.
+    _loadToken++;
     if (_isAdvancing) return;
     final current = state.value?.currentEntry;
     if (current?.id != null) {
