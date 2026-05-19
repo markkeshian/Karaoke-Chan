@@ -149,28 +149,33 @@ class YoutubeService {
   }
 
   /// Resolves the best available stream URL for a YouTube video.
+  ///
+  /// Resolution order:
+  ///   1. Muxed (video+audio) — ideal for karaoke, sorted best quality first.
+  ///   2. Best audio-only stream — fallback when no muxed stream is available.
+  ///
+  /// Uses [YoutubeApiClient.ios] and [YoutubeApiClient.androidVr] which
+  /// reliably return muxed streams and don't require a JS challenge solver.
   Future<String?> getBestStreamUrl(String videoId) async {
     try {
-      final manifest = await _yt.videos.streamsClient.getManifest(videoId);
+      final manifest = await _yt.videos.streamsClient.getManifest(
+        videoId,
+        ytClients: [YoutubeApiClient.ios, YoutubeApiClient.androidVr],
+      );
 
-      // Prefer muxed (video+audio) — best for karaoke.
-      for (final stream in manifest.muxed.sortByVideoQuality()) {
-        try {
+      // 1. Prefer muxed (video+audio) — best for karaoke.
+      if (manifest.muxed.isNotEmpty) {
+        final sorted = manifest.muxed.sortByVideoQuality();
+        for (final stream in sorted) {
           final url = stream.url.toString();
           if (url.isNotEmpty) return url;
-        } catch (_) {
-          continue;
         }
       }
 
-      // Fallback: audio-only.
-      for (final stream in manifest.audioOnly.sortByBitrate().reversed) {
-        try {
-          final url = stream.url.toString();
-          if (url.isNotEmpty) return url;
-        } catch (_) {
-          continue;
-        }
+      // 2. Fallback: highest-bitrate audio-only stream.
+      if (manifest.audioOnly.isNotEmpty) {
+        final url = manifest.audioOnly.withHighestBitrate().url.toString();
+        if (url.isNotEmpty) return url;
       }
     } catch (_) {}
 

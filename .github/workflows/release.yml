@@ -118,8 +118,8 @@ jobs:
           body: |
             ## What's new in ${{ github.ref_name }}
 
-            - fix: bundle sqlite3.dll so the app no longer crashes at launch on Windows
-            - fix: guard `openAppSettings()` so it only fires on Android
+            - fix: upgrade youtube_explode_dart to v3.1.0 to resolve "No playable stream found" error
+            - fix: use ios + androidVr YouTube API clients which reliably return muxed streams
 
             ## Installation
 
