@@ -116,11 +116,16 @@ jobs:
         with:
           name: "Karaoke Chan ${{ github.ref_name }}"
           body: |
-            ## What's new in ${{ github.ref_name }}
+            ## Karaoke Chan ${{ github.ref_name }}
 
-            - ux: play/pause and next buttons are now always clickable — tapping next while a stream is loading cancels the in-flight request immediately and skips to the next song
-            - ux: tapping the spinner (play button while loading) now cancels the load and returns to idle instead of being blocked
-            - ux: keyboard shortcuts (Space, Cmd+→) work immediately during loading
+            Local & online karaoke player for Windows, Android, and macOS.
+
+            ### Features
+            - 🎤 Play local karaoke files (MP4, MP3, CDG, etc.)
+            - 🌐 Search & stream YouTube songs directly
+            - 📋 Mixed queue — local files and YouTube in the same queue
+            - ▶️ Auto-advance with cancellation-safe loading
+            - 🖥️ Fullscreen mode with overlay controls
 
             ## Installation
 
