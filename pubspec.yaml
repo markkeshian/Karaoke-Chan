@@ -70,7 +70,7 @@ msix_config:
   description: A cross-platform karaoke queue app
   publisher: CN=015A585B-04FF-4CDD-B665-24520B3CD11F
   logo_path: assets/icons/applogo.png
-  capabilities: internetClient, privateNetworkClientServer
+  capabilities: internetClient, privateNetworkClientServer, broadFileSystemAccess
   languages: en-us
 
 flutter:

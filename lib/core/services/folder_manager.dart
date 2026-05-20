@@ -51,12 +51,17 @@ class FolderManager {
     final granted = await requestStoragePermission();
     if (!granted) return null;
 
-    final result = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: 'Select your Karaoke folder',
-    );
-    if (result == null) return null;
-    await saveFolder(result);
-    return result;
+    try {
+      final result = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: 'Select your Karaoke folder',
+      );
+      if (result == null) return null;
+      await saveFolder(result);
+      return result;
+    } catch (e) {
+      debugPrint('FolderManager.pickFolder error: $e');
+      return null;
+    }
   }
 
   Future<void> saveFolder(String path) async {
