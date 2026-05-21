@@ -180,12 +180,10 @@ class YoutubeService {
     for (final client in clients) {
       try {
         final manifest = await _yt.videos.streamsClient
-            .getManifest(videoId, ytClients: [client])
-            .timeout(
-              const Duration(seconds: 20),
-              onTimeout: () =>
-                  throw Exception('Stream URL resolution timed out.'),
-            );
+            .getManifest(videoId, ytClients: [client]).timeout(
+          const Duration(seconds: 20),
+          onTimeout: () => throw Exception('Stream URL resolution timed out.'),
+        );
 
         // 1. Prefer muxed (video+audio) — best for karaoke.
         if (manifest.muxed.isNotEmpty) {
@@ -212,8 +210,7 @@ class YoutubeService {
     }
 
     // All clients exhausted — surface the last meaningful error.
-    throw Exception(
-        'Could not resolve a playable stream for "$videoId". '
+    throw Exception('Could not resolve a playable stream for "$videoId". '
         'Last error: $lastError');
   }
 

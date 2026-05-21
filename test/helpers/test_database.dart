@@ -49,6 +49,3 @@ Future<DatabaseHelper> openTestDatabase() async {
   DatabaseHelper.instance.injectForTesting(db);
   return DatabaseHelper.instance;
 }
-
-
-
