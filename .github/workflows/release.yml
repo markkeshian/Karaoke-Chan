@@ -22,12 +22,17 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.29.3'
+          flutter-version: '3.41.9'
           channel: 'stable'
           cache: true
 
       - name: Install dependencies
         run: flutter pub get
+
+      - name: Analyze & test
+        run: |
+          flutter analyze --no-fatal-infos
+          flutter test
 
       - name: Build APK
         run: flutter build apk --release
@@ -51,7 +56,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.29.3'
+          flutter-version: '3.41.9'
           channel: 'stable'
           cache: true
 
@@ -63,6 +68,21 @@ jobs:
 
       - name: Build MSIX
         run: dart run msix:create --store
+
+      - name: Smoke-test MSIX launch
+        shell: pwsh
+        run: |
+          $msix = Get-ChildItem -Path build\windows\x64\runner\Release `
+                    -Filter "*.msix" | Select-Object -First 1
+          if (-not $msix) { Write-Error "No .msix found"; exit 1 }
+          Add-AppxPackage -Path $msix.FullName
+          $family = (Get-AppxPackage -Name 'markkeshian.Karaoke-Chan').PackageFamilyName
+          Start-Process "shell:AppsFolder\${family}!App"
+          Start-Sleep -Seconds 10
+          $proc = Get-Process -Name "karaoke_chan" -ErrorAction SilentlyContinue
+          if (-not $proc) { Write-Error "App crashed at launch — smoke test failed"; exit 1 }
+          Write-Host "Smoke test passed (PID $($proc.Id))"
+          Stop-Process -Name "karaoke_chan" -Force -ErrorAction SilentlyContinue
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
@@ -80,7 +100,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.29.3'
+          flutter-version: '3.41.9'
           channel: 'stable'
           cache: true
 

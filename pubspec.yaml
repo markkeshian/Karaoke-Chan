@@ -79,13 +79,6 @@ msix_config:
   # grants access to the user-chosen folder automatically via the OS token.
   capabilities: internetClient, privateNetworkClientServer
   languages: en-us
-  # Declare the Visual C++ runtime as a framework dependency so the OS installs
-  # it alongside the app on machines that don't already have it. This is
-  # required for native DLLs bundled by media_kit and sqlite3_flutter_libs.
-  dependencies:
-    - name: Microsoft.VCLibs.140.00
-      min_version: 14.0.0.0
-      publisher: "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
 
 flutter:
   uses-material-design: true
