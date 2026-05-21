@@ -279,6 +279,8 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
       final cached = isRetry ? null : _getCachedUrl(video.videoId);
       if (cached == null)
         _evictCachedUrl(video.videoId); // clean up stale entry
+      // getBestStreamUrl throws on complete failure (all clients exhausted),
+      // so a non-null return is guaranteed; the null guard is a safety net.
       final streamUrl = cached ??
           await ref
               .read(youtubeServiceProvider)

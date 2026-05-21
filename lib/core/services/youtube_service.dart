@@ -158,33 +158,63 @@ class YoutubeService {
   ///   1. Muxed (video+audio) — ideal for karaoke, sorted best quality first.
   ///   2. Best audio-only stream — fallback when no muxed stream is available.
   ///
-  /// Uses [YoutubeApiClient.ios] and [YoutubeApiClient.androidVr] which
-  /// reliably return muxed streams and don't require a JS challenge solver.
+  /// Tries multiple API clients in order so that a rejection from one (common
+  /// on Android devices) automatically falls through to the next.
+  ///
+  /// Throws a descriptive [Exception] on complete failure so the caller can
+  /// surface the real reason to the user instead of a generic message.
   Future<String?> getBestStreamUrl(String videoId) async {
-    try {
-      final manifest = await _yt.videos.streamsClient.getManifest(
-        videoId,
-        ytClients: [YoutubeApiClient.ios, YoutubeApiClient.androidVr],
-      ).timeout(const Duration(seconds: 20),
-          onTimeout: () => throw Exception('Stream URL resolution timed out.'));
+    // Ordered list of clients to try.  `androidSdkless` is the library default
+    // and most reliable on real Android devices; `android`, `tv`, and `ios`
+    // are kept as fallbacks for when the primary client is throttled.
+    final clients = [
+      YoutubeApiClient.androidSdkless,
+      YoutubeApiClient.android,
+      YoutubeApiClient.tv,
+      YoutubeApiClient.ios,
+      YoutubeApiClient.androidVr,
+    ];
 
-      // 1. Prefer muxed (video+audio) — best for karaoke.
-      if (manifest.muxed.isNotEmpty) {
-        final sorted = manifest.muxed.sortByVideoQuality();
-        for (final stream in sorted) {
-          final url = stream.url.toString();
+    Object? lastError;
+
+    for (final client in clients) {
+      try {
+        final manifest = await _yt.videos.streamsClient
+            .getManifest(videoId, ytClients: [client])
+            .timeout(
+              const Duration(seconds: 20),
+              onTimeout: () =>
+                  throw Exception('Stream URL resolution timed out.'),
+            );
+
+        // 1. Prefer muxed (video+audio) — best for karaoke.
+        if (manifest.muxed.isNotEmpty) {
+          final sorted = manifest.muxed.sortByVideoQuality();
+          for (final stream in sorted) {
+            final url = stream.url.toString();
+            if (url.isNotEmpty) return url;
+          }
+        }
+
+        // 2. Fallback: highest-bitrate audio-only stream.
+        if (manifest.audioOnly.isNotEmpty) {
+          final url = manifest.audioOnly.withHighestBitrate().url.toString();
           if (url.isNotEmpty) return url;
         }
-      }
 
-      // 2. Fallback: highest-bitrate audio-only stream.
-      if (manifest.audioOnly.isNotEmpty) {
-        final url = manifest.audioOnly.withHighestBitrate().url.toString();
-        if (url.isNotEmpty) return url;
+        // Manifest returned but had no usable streams — try next client.
+        lastError = Exception(
+            'Client ${client.runtimeType}: manifest had no playable streams.');
+      } catch (e) {
+        // This client failed — record the reason and try the next one.
+        lastError = e;
       }
-    } catch (_) {}
+    }
 
-    return null;
+    // All clients exhausted — surface the last meaningful error.
+    throw Exception(
+        'Could not resolve a playable stream for "$videoId". '
+        'Last error: $lastError');
   }
 
   void dispose() => _yt.close();

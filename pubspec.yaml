@@ -1,7 +1,7 @@
 name: karaoke_chan
 description: A cross-platform karaoke queue app.
 publish_to: none
-version: 1.0.6+7
+version: 1.0.7+8
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -36,6 +36,7 @@ dependencies:
 
   # Persistence
   shared_preferences: ^2.3.3
+  path_provider: ^2.1.4
 
   # UI extras
   google_fonts: ^6.2.1
@@ -66,12 +67,25 @@ msix_config:
   display_name: Karaoke-Chan
   publisher_display_name: markkeshian
   identity_name: markkeshian.Karaoke-Chan
-  msix_version: 1.0.6.0
+  msix_version: 1.0.7.0
   description: A cross-platform karaoke queue app
   publisher: CN=015A585B-04FF-4CDD-B665-24520B3CD11F
   logo_path: assets/icons/applogo.png
-  capabilities: internetClient, privateNetworkClientServer, broadFileSystemAccess
+  # NOTE: "broadFileSystemAccess" is a Microsoft Store *restricted* capability
+  # that requires explicit approval from Microsoft for your publisher account.
+  # Submitting without that approval causes the Store to produce a malformed
+  # package manifest, which makes the app crash at launch with no crash log.
+  # File scanning works without it because FilePicker's IFileOpenDialog broker
+  # grants access to the user-chosen folder automatically via the OS token.
+  capabilities: internetClient, privateNetworkClientServer
   languages: en-us
+  # Declare the Visual C++ runtime as a framework dependency so the OS installs
+  # it alongside the app on machines that don't already have it. This is
+  # required for native DLLs bundled by media_kit and sqlite3_flutter_libs.
+  dependencies:
+    - name: Microsoft.VCLibs.140.00
+      min_version: 14.0.0.0
+      publisher: "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
 
 flutter:
   uses-material-design: true

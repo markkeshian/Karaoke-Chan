@@ -1,0 +1,91 @@
+name: Windows Build & MSIX
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: # allow manual trigger from the Actions tab
+
+jobs:
+  build-windows:
+    name: Build Windows MSIX
+    runs-on: windows-latest
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Flutter ───────────────────────────────────────────────────────────
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.41.9"   # keep in sync with your dev Flutter version
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # ── Static analysis (catches Dart errors before spending time building) ─
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      # ── Unit tests ────────────────────────────────────────────────────────
+      - name: Run unit tests
+        run: flutter test
+
+      # ── Windows release build ─────────────────────────────────────────────
+      - name: Build Windows (release)
+        run: flutter build windows --release
+
+      # ── Generate MSIX ─────────────────────────────────────────────────────
+      # Uses the msix_config already defined in pubspec.yaml.
+      # The certificate password is stored as a GitHub secret so it is never
+      # committed to the repo.  For Store submissions the msix package signs
+      # with the publisher CN from pubspec.yaml; a self-signed cert is used
+      # here for local/CI validation only.
+      - name: Create MSIX package
+        run: dart run msix:create
+
+      # ── Smoke-test: verify the MSIX can be installed ───────────────────────
+      # This catches "crashes at launch / no crash log" class of bugs by
+      # actually installing and launching the app on the CI runner.
+      - name: Install MSIX (smoke test)
+        shell: pwsh
+        run: |
+          $msix = Get-ChildItem -Path build\windows\x64\runner\Release -Filter "*.msix" -ErrorAction Stop | Select-Object -First 1
+          if (-not $msix) { Write-Error "No .msix file found after build"; exit 1 }
+          Write-Host "Installing $($msix.FullName)"
+          Add-AppxPackage -Path $msix.FullName
+          Write-Host "MSIX installed successfully."
+
+      - name: Launch app and verify it starts (smoke test)
+        shell: pwsh
+        run: |
+          # Start the app in the background and give it 10 seconds to launch.
+          Start-Process "shell:AppsFolder\markkeshian.Karaoke-Chan_$(
+            (Get-AppxPackage -Name 'markkeshian.Karaoke-Chan').PackageFamilyName
+          )!App" -ErrorAction Stop
+          Start-Sleep -Seconds 10
+
+          # If the process is still running the app didn't crash at startup.
+          $proc = Get-Process -Name "karaoke_chan" -ErrorAction SilentlyContinue
+          if (-not $proc) {
+            Write-Error "App process not found after 10 s — it likely crashed at launch."
+            exit 1
+          }
+          Write-Host "App is running (PID $($proc.Id)). Smoke test passed."
+
+          # Clean up
+          Stop-Process -Name "karaoke_chan" -Force -ErrorAction SilentlyContinue
+
+      # ── Upload MSIX as a build artifact ───────────────────────────────────
+      - name: Upload MSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: karaoke-chan-windows-msix
+          path: build/windows/x64/runner/Release/*.msix
+          if-no-files-found: error
+          retention-days: 14

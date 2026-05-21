@@ -11,7 +11,8 @@ Future<DatabaseHelper> openTestDatabase() async {
   final db = await databaseFactoryFfi.openDatabase(
     inMemoryDatabasePath,
     options: OpenDatabaseOptions(
-      version: 1,
+      // Keep this version in sync with DatabaseHelper._db version.
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE songs (
@@ -24,6 +25,7 @@ Future<DatabaseHelper> openTestDatabase() async {
             cover_art_path TEXT,
             play_count INTEGER NOT NULL DEFAULT 0,
             last_played_at TEXT,
+            has_video INTEGER NOT NULL DEFAULT 0,
             added_at TEXT NOT NULL DEFAULT (datetime('now'))
           )
         ''');
