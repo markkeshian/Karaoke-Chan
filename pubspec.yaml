@@ -67,7 +67,7 @@ msix_config:
   display_name: Karaoke-Chan
   publisher_display_name: markkeshian
   identity_name: markkeshian.Karaoke-Chan
-  msix_version: 1.0.8.0
+  msix_version: 1.0.8
   description: A cross-platform karaoke queue app
   publisher: CN=015A585B-04FF-4CDD-B665-24520B3CD11F
   logo_path: assets/icons/applogo.png
