@@ -277,8 +277,9 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
       // Use pre-fetched URL from cache if available — but skip cache on retry
       // since the cached URL may be expired (caused the error in the first place).
       final cached = isRetry ? null : _getCachedUrl(video.videoId);
-      if (cached == null)
+      if (cached == null) {
         _evictCachedUrl(video.videoId); // clean up stale entry
+      }
       // getBestStreamUrl throws on complete failure (all clients exhausted),
       // so a non-null return is guaranteed; the null guard is a safety net.
       final streamUrl = cached ??

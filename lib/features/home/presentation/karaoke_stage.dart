@@ -2081,11 +2081,13 @@ class _PlayerControlBar extends ConsumerWidget {
                         button: true,
                         enabled: !player.isLoading,
                         child: GestureDetector(
-                          onTap: player.isLoading ? null : notifier.togglePlayPause,
+                          onTap: player.isLoading
+                              ? null
+                              : notifier.togglePlayPause,
                           child: Container(
                             width: 40,
                             height: 40,
-                            decoration: BoxDecoration(
+                            decoration: const BoxDecoration(
                               color: _purple,
                               shape: BoxShape.circle,
                             ),
@@ -2125,10 +2127,10 @@ class _PlayerControlBar extends ConsumerWidget {
                                   color: Colors.white.withValues(alpha: 0.08),
                                   shape: BoxShape.circle,
                                   border: Border.all(
-                                      color: Colors.white.withValues(
-                                          alpha: 0.56)),
+                                      color:
+                                          Colors.white.withValues(alpha: 0.56)),
                                 ),
-                                child: Icon(
+                                child: const Icon(
                                   Icons.skip_next,
                                   color: Colors.white,
                                   size: 18,
@@ -2234,7 +2236,8 @@ class _PlayerControlBar extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       _MediaButton(
-                        onTap: player.isLoading ? null : notifier.togglePlayPause,
+                        onTap:
+                            player.isLoading ? null : notifier.togglePlayPause,
                         isLoading: player.isLoading,
                         size: 54,
                         backgroundColor: _purple,
