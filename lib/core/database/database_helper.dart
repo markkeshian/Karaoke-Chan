@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 class DatabaseHelper {
@@ -31,13 +32,27 @@ class DatabaseHelper {
 
     try {
       // Use FFI for desktop platforms
-      if (!kIsWeb &&
-          (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
+      final isDesktop = !kIsWeb &&
+          (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
+      if (isDesktop) {
         sqfliteFfiInit();
         databaseFactory = databaseFactoryFfi;
       }
 
-      final dbPath = await getDatabasesPath();
+      // On desktop (especially MSIX-packaged Windows apps installed from the
+      // Microsoft Store), the default getDatabasesPath() resolves to the
+      // current working directory, which points at the read-only package
+      // install folder under C:\Program Files\WindowsApps\... Writing there
+      // throws and crashes the app at launch. Use the per-user app-support
+      // directory instead, which is always writable for packaged apps.
+      final String dbPath;
+      if (isDesktop) {
+        final supportDir = await getApplicationSupportDirectory();
+        await supportDir.create(recursive: true);
+        dbPath = supportDir.path;
+      } else {
+        dbPath = await getDatabasesPath();
+      }
       final path = join(dbPath, 'karaoke_chan.db');
 
       _db = await openDatabase(

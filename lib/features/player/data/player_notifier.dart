@@ -306,6 +306,8 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
     final song = entry.song;
     if (song == null) return;
 
+    final myToken = ++_loadToken;
+
     _update((s) => s.copyWith(
           currentEntry: entry,
           status: PlayerStatus.loading,
@@ -314,10 +316,18 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
           hasVideo: false,
         ));
 
-    await _player.open(Media(Uri.file(song.filePath).toString()));
-
-    if (entry.id != null) {
-      await ref.read(queueRepositoryProvider).markPlaying(entry.id!);
+    try {
+      await _player.open(Media(Uri.file(song.filePath).toString()));
+      if (_loadToken != myToken || _disposed) return;
+      if (entry.id != null) {
+        await ref.read(queueRepositoryProvider).markPlaying(entry.id!);
+      }
+    } catch (e) {
+      if (_loadToken != myToken || _disposed) return;
+      _update((s) => s.copyWith(
+            status: PlayerStatus.error,
+            errorMessage: 'Could not play "${song.title}": $e',
+          ));
     }
   }
 
