@@ -97,15 +97,10 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
   }
 
   void _setFullscreen(bool value) {
-    debugPrint(
-        '[Fullscreen] _setFullscreen called: value=$value, current=$_fullscreen');
     setState(() => _fullscreen = value);
-    debugPrint('[Fullscreen] setState done: _fullscreen=$_fullscreen');
   }
 
   void _toggleFullscreen() {
-    debugPrint(
-        '[Fullscreen] _toggleFullscreen called: current=$_fullscreen -> next=${!_fullscreen}');
     _setFullscreen(!_fullscreen);
   }
 
@@ -876,21 +871,6 @@ class _SidebarSettingsPanel extends ConsumerWidget {
         const _SettingsSectionLabel(label: 'About'),
         const Gap(8),
         const _SettingsItem(
-          icon: Icons.mic,
-          iconColor: _purple,
-          title: 'Karaoke-Chan  v1.0.0',
-          subtitle: 'Local & Online Karaoke Player',
-        ),
-        const Gap(6),
-        const _SettingsItem(
-          icon: Icons.queue_music,
-          iconColor: Color(0xFF3B82F6),
-          title: 'Features',
-          subtitle:
-              'Local files · YouTube search & streaming · Mixed queue · Auto-advance · Fullscreen mode',
-        ),
-        const Gap(6),
-        const _SettingsItem(
           icon: Icons.person_outline,
           iconColor: Colors.white38,
           title: 'Developer',
@@ -1514,6 +1494,7 @@ class _VideoArea extends ConsumerStatefulWidget {
 
 class _VideoAreaState extends ConsumerState<_VideoArea> {
   bool _overlayVisible = true;
+  bool _locked = false;
   Timer? _hideTimer;
 
   @override
@@ -1538,19 +1519,49 @@ class _VideoAreaState extends ConsumerState<_VideoArea> {
       setState(() => _overlayVisible = true);
       _startHideTimer();
     }
+    // Leaving fullscreen drops lock mode — it only applies in fullscreen.
+    if (!widget.fullscreen && oldWidget.fullscreen && _locked) {
+      setState(() => _locked = false);
+    }
   }
 
   void _startHideTimer() {
     _hideTimer?.cancel();
-    _hideTimer = Timer(const Duration(seconds: 2), () {
+    // Lock mode flashes its badge for slightly longer so users can find the
+    // unlock button before it fades out again.
+    final hideAfter =
+        _locked ? const Duration(seconds: 3) : const Duration(seconds: 2);
+    _hideTimer = Timer(hideAfter, () {
       if (mounted) setState(() => _overlayVisible = false);
     });
   }
 
+  /// Mouse hover / move on desktop — reveal controls and reset the hide timer.
+  /// In lock mode the hover is ignored, otherwise any cursor jitter would
+  /// keep resetting the timer and the unlock badge would never fade out.
   void _onCursorActivity() {
-    debugPrint(
-        '[Fullscreen] _onCursorActivity: overlayVisible=$_overlayVisible');
+    if (_locked) return;
     if (!_overlayVisible) setState(() => _overlayVisible = true);
+    _startHideTimer();
+  }
+
+  /// Tap on the empty video area — toggle the overlay visibility.
+  /// In lock mode, every tap just reveals the unlock button briefly.
+  void _onTapVideo() {
+    if (_locked) {
+      if (!_overlayVisible) setState(() => _overlayVisible = true);
+      _startHideTimer();
+      return;
+    }
+    setState(() => _overlayVisible = !_overlayVisible);
+    if (_overlayVisible) _startHideTimer();
+  }
+
+  void _toggleLock() {
+    setState(() {
+      _locked = !_locked;
+      _overlayVisible = true;
+    });
     _startHideTimer();
   }
 
@@ -1560,189 +1571,295 @@ class _VideoAreaState extends ConsumerState<_VideoArea> {
     final controller = notifier.videoController;
     final player = widget.player;
     final queue = widget.queue;
+    final showControls = _overlayVisible && !_locked;
 
-    // Use Listener for broad pointer coverage; Android needs overlay for touch on the video platform view.
-    return Listener(
-      onPointerHover: (_) => _onCursorActivity(),
-      onPointerDown: (_) => _onCursorActivity(),
-      child: MouseRegion(
-        cursor: _overlayVisible
-            ? SystemMouseCursors.basic
-            : SystemMouseCursors.none,
-        child: Container(
-          color: Colors.black,
-          child: Stack(children: [
-            // Video widget — PERMANENTLY in the tree.
-            if (controller != null)
-              Positioned.fill(
+    return MouseRegion(
+      onHover: (_) => _onCursorActivity(),
+      cursor:
+          _overlayVisible ? SystemMouseCursors.basic : SystemMouseCursors.none,
+      child: Container(
+        color: Colors.black,
+        child: Stack(children: [
+          // Video widget — PERMANENTLY in the tree.
+          if (controller != null)
+            Positioned.fill(
+              child: ExcludeSemantics(
                 child: Video(
                   controller: controller,
                   fit: BoxFit.contain,
                   controls: NoVideoControls,
                 ),
               ),
+            ),
 
-            // Idle placeholder
-            if (player.isIdle)
-              const Center(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.queue_music_rounded,
-                          size: 64, color: Colors.white12),
-                      Gap(20),
-                      Text(
-                        'No song selected',
-                        style: TextStyle(
-                            color: Color(0xFF9CA3AF),
-                            fontSize: 22,
-                            fontWeight: FontWeight.w600),
-                      ),
-                      Gap(8),
-                      Text(
-                        'Pick a song from the list and tap QUEUE to start',
-                        style:
-                            TextStyle(color: Color(0xFF6B7280), fontSize: 14),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-            // Audio-only indicator
-            if (!player.isIdle &&
-                !player.isLoading &&
-                !player.hasVideo &&
-                !player.hasError)
-              const Center(
-                child: Text(
-                  '♫  Playing Audio',
-                  style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 22),
-                ),
-              ),
-
-            // Loading indicator (YouTube stream resolving / file opening)
-            if (player.isLoading)
-              Center(
+          // Idle placeholder
+          if (player.isIdle)
+            const Center(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const CircularProgressIndicator(
-                      color: Color(0xFF3B82F6),
-                      strokeWidth: 3,
-                    ),
-                    const Gap(16),
+                    Icon(Icons.queue_music_rounded,
+                        size: 64, color: Colors.white12),
+                    Gap(20),
                     Text(
-                      player.currentEntry?.song?.title ?? 'Loading…',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w500),
+                      'No song selected',
+                      style: TextStyle(
+                          color: Color(0xFF9CA3AF),
+                          fontSize: 22,
+                          fontWeight: FontWeight.w600),
                     ),
-                    const Gap(6),
-                    const Text(
-                      'Preparing stream…',
-                      style: TextStyle(color: Colors.white38, fontSize: 12),
+                    Gap(8),
+                    Text(
+                      'Pick a song from the list and tap QUEUE to start',
+                      style: TextStyle(color: Color(0xFF6B7280), fontSize: 14),
                     ),
                   ],
                 ),
               ),
+            ),
 
-            // Error display
-            if (player.hasError)
-              Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(32),
-                  child: Text(
-                    '⚠ ${player.errorMessage ?? "Playback error"}',
-                    style:
-                        const TextStyle(color: Colors.redAccent, fontSize: 15),
-                    textAlign: TextAlign.center,
+          // Audio-only indicator
+          if (!player.isIdle &&
+              !player.isLoading &&
+              !player.hasVideo &&
+              !player.hasError)
+            const Center(
+              child: Text(
+                '♫  Playing Audio',
+                style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 22),
+              ),
+            ),
+
+          // Loading indicator (YouTube stream resolving / file opening)
+          if (player.isLoading)
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(
+                    color: Color(0xFF3B82F6),
+                    strokeWidth: 3,
                   ),
+                  const Gap(16),
+                  Text(
+                    player.currentEntry?.song?.title ?? 'Loading…',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500),
+                  ),
+                  const Gap(6),
+                  const Text(
+                    'Preparing stream…',
+                    style: TextStyle(color: Colors.white38, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+
+          // Error display
+          if (player.hasError)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Text(
+                  '⚠ ${player.errorMessage ?? "Playback error"}',
+                  style: const TextStyle(color: Colors.redAccent, fontSize: 15),
+                  textAlign: TextAlign.center,
                 ),
               ),
+            ),
 
-            // Android: transparent overlay to capture touch events absorbed by the video platform view.
-            if (Platform.isAndroid)
-              Positioned.fill(
-                child: _overlayVisible
-                    ? Listener(
-                        behavior: HitTestBehavior.translucent,
-                        onPointerDown: (_) => _onCursorActivity(),
-                      )
-                    : GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: _onCursorActivity,
-                      ),
-              ),
+          // Tap-to-toggle layer covering the whole video area. Sits BELOW the
+          // controls so taps on buttons/sliders consume their hit-test first
+          // and only "empty" taps fall through here.
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _onTapVideo,
+            ),
+          ),
 
-            // Now-playing bar at the bottom of the video area — fullscreen only.
-            // In normal mode, _PlayerControlBar (below the video) is always visible.
-            if (widget.fullscreen)
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
+          // Now-playing bar at the bottom of the video area — fullscreen only.
+          // Hidden in lock mode.
+          if (widget.fullscreen && !_locked)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: ExcludeSemantics(
+                excluding: !showControls,
                 child: IgnorePointer(
-                  ignoring: !_overlayVisible,
+                  ignoring: !showControls,
                   child: AnimatedOpacity(
-                    opacity: _overlayVisible ? 1.0 : 0.0,
+                    opacity: showControls ? 1.0 : 0.0,
                     duration: const Duration(milliseconds: 400),
                     child: _NowPlayingOverlay(player: player, queue: queue),
                   ),
                 ),
               ),
+            ),
 
-            // Fullscreen toggle button (top-right); always directly toggles.
-            // Overlay visibility is controlled by cursor/pointer activity only.
+          // Top-right control cluster: lock toggle + fullscreen toggle.
+          // In lock mode, only the lock button (centered) is shown.
+          if (widget.fullscreen && !_locked)
+            Positioned(
+              top: 16,
+              right: 16,
+              child: ExcludeSemantics(
+                excluding: !showControls,
+                child: AnimatedOpacity(
+                  opacity: showControls ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 300),
+                  child: IgnorePointer(
+                    ignoring: !showControls,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _CircleIconButton(
+                          icon: Icons.lock_open,
+                          tooltip: 'Lock controls',
+                          onTap: _toggleLock,
+                        ),
+                        const SizedBox(width: 8),
+                        _CircleIconButton(
+                          icon: widget.fullscreen
+                              ? Icons.fullscreen_exit
+                              : Icons.fullscreen,
+                          tooltip: widget.fullscreen
+                              ? 'Exit fullscreen'
+                              : 'Enter fullscreen',
+                          onTap: () {
+                            _onCursorActivity();
+                            widget.onToggle();
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+          // Fullscreen toggle button (non-fullscreen view) — keeps existing
+          // behaviour for the embedded video area.
+          if (!widget.fullscreen)
             Positioned(
               top: 16,
               right: 16,
               child: AnimatedOpacity(
                 opacity: _overlayVisible ? 1.0 : 0.0,
                 duration: const Duration(milliseconds: 300),
-                child: Semantics(
-                  label: widget.fullscreen
-                      ? 'Exit fullscreen'
-                      : 'Enter fullscreen',
-                  button: true,
-                  child: SizedBox(
-                    width: _kMinTarget,
-                    height: _kMinTarget,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () {
-                        _onCursorActivity();
-                        widget.onToggle();
-                      },
-                      child: Center(
-                        child: Container(
-                          width: 40,
-                          height: 40,
-                          decoration: const BoxDecoration(
-                              color: _overlayBg, shape: BoxShape.circle),
-                          child: Icon(
-                            widget.fullscreen
-                                ? Icons.fullscreen_exit
-                                : Icons.fullscreen,
-                            color: Colors.white,
-                            size: 22,
-                          ),
-                        ),
-                      ),
-                    ),
+                child: IgnorePointer(
+                  ignoring: !_overlayVisible,
+                  child: _CircleIconButton(
+                    icon: Icons.fullscreen,
+                    tooltip: 'Enter fullscreen',
+                    onTap: () {
+                      _onCursorActivity();
+                      widget.onToggle();
+                    },
                   ),
                 ),
               ),
             ),
-          ]),
+
+          // Lock-mode unlock badge. Positioned in the same top-right corner
+          // as the lock button so users instinctively reach for the same
+          // spot. Visible only while _overlayVisible is true (tap the screen
+          // to flash it).
+          if (widget.fullscreen && _locked)
+            Positioned(
+              top: 16,
+              right: 16,
+              child: IgnorePointer(
+                ignoring: !_overlayVisible,
+                child: AnimatedOpacity(
+                  opacity: _overlayVisible ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 250),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: _overlayBg,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Text(
+                          'Tap lock to unlock',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      _CircleIconButton(
+                        icon: Icons.lock,
+                        tooltip: 'Unlock controls',
+                        onTap: _toggleLock,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Round, semi-transparent icon button used by the fullscreen video overlay.
+class _CircleIconButton extends StatelessWidget {
+  const _CircleIconButton({
+    required this.icon,
+    required this.onTap,
+    this.tooltip,
+  });
+
+  final IconData icon;
+  final VoidCallback onTap;
+  final String? tooltip;
+  static const double size = 40;
+  static const double iconSize = 22;
+
+  @override
+  Widget build(BuildContext context) {
+    // NOTE: deliberately uses Semantics(label:) rather than Tooltip — Tooltip
+    // creates an overlay entry whose semantic nodes get repeatedly inserted
+    // and removed when the surrounding AnimatedOpacity/IgnorePointer toggles,
+    // which produces "Failed to update ui::AXTree, Nodes left pending"
+    // errors on Windows. Semantics labels are equivalent for screen readers
+    // and don't churn the accessibility tree.
+    final button = SizedBox(
+      width: _kMinTarget > size ? _kMinTarget : size,
+      height: _kMinTarget > size ? _kMinTarget : size,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Center(
+          child: Container(
+            width: size,
+            height: size,
+            decoration: const BoxDecoration(
+              color: _overlayBg,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: Colors.white, size: iconSize),
+          ),
         ),
       ),
     );
+    if (tooltip == null) return button;
+    return Semantics(label: tooltip, button: true, child: button);
   }
 }
 
@@ -1756,8 +1873,19 @@ class _NowPlayingOverlay extends ConsumerWidget {
     if (player.isIdle && queue.isEmpty) return const SizedBox.shrink();
     final notifier = ref.read(playerProvider.notifier);
     final song = player.currentEntry?.song;
-    final next =
-        queue.where((e) => e.status == QueueStatus.waiting).firstOrNull;
+    final nextItem =
+        player.unifiedQueue.isNotEmpty ? player.unifiedQueue.first : null;
+    final nextTitle = nextItem?.title;
+    final nextSubtitle = nextItem == null
+        ? null
+        : nextItem.isYoutube
+            ? nextItem.youtubeVideo?.channel
+            : null;
+    final nextIcon = nextItem == null
+        ? null
+        : nextItem.isYoutube
+            ? Icons.language
+            : Icons.person_outline;
     final bottomPad = MediaQuery.paddingOf(context).bottom;
 
     return Container(
@@ -1905,7 +2033,7 @@ class _NowPlayingOverlay extends ConsumerWidget {
               ],
               // ── Right: UP NEXT ───────────────────────────────────
               Expanded(
-                child: next != null
+                child: nextItem != null
                     ? Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         mainAxisSize: MainAxisSize.min,
@@ -1914,28 +2042,38 @@ class _NowPlayingOverlay extends ConsumerWidget {
                               style: TextStyle(
                                   fontSize: _tsXs,
                                   fontWeight: FontWeight.w700,
-                                  color: Colors.white38,
+                                  color: _purple,
                                   letterSpacing: 1.2)),
                           const SizedBox(height: 3),
                           Text(
-                            next.song?.title ?? 'Song #${next.songId}',
+                            nextTitle!,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.end,
                             style: const TextStyle(
                                 color: Colors.white,
-                                fontSize: 13,
+                                fontSize: 14,
                                 fontWeight: FontWeight.bold),
                           ),
-                          if (next.song?.artist != null ||
-                              next.song?.folderName != null) ...[
+                          if (nextSubtitle != null &&
+                              nextSubtitle.isNotEmpty) ...[
                             const SizedBox(height: 2),
-                            Text(
-                              next.song!.artist ?? next.song!.folderName!,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.end,
-                              style: const TextStyle(color: _sub, fontSize: 12),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(nextIcon, color: Colors.white38, size: 11),
+                                const SizedBox(width: 4),
+                                Flexible(
+                                  child: Text(
+                                    nextSubtitle,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.end,
+                                    style: const TextStyle(
+                                        color: _sub, fontSize: 12),
+                                  ),
+                                ),
+                              ],
                             ),
                           ],
                         ],
@@ -2106,7 +2244,7 @@ class _PlayerControlBar extends ConsumerWidget {
                                         : Icons.play_arrow,
                                     color: Colors.black,
                                     size: 22,
-                                  ),
+                                  ), // ignore: prefer_const_constructors
                           ),
                         ),
                       ),
@@ -2408,9 +2546,7 @@ class _MediaButton extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          tooltip != null && !_disabled
-              ? Tooltip(message: tooltip!, child: buttonWidget)
-              : buttonWidget,
+          buttonWidget,
           const SizedBox(height: 4),
           Text(
             label,
