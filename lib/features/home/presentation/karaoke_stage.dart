@@ -2841,7 +2841,7 @@ class _QueuePanel extends ConsumerStatefulWidget {
 
 class _QueuePanelState extends ConsumerState<_QueuePanel> {
   // Start collapsed on narrow/short screens to save vertical space.
-  late bool _collapsed = Platform.isAndroid;
+  late bool _collapsed = false;
 
   @override
   Widget build(BuildContext context) {
