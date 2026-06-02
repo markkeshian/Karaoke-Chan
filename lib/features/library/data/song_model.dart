@@ -24,6 +24,7 @@ class Song {
   final String? coverArtPath;
   final int playCount;
   final DateTime? lastPlayedAt;
+
   /// Whether this song file contains a video track (stored in DB).
   final bool hasVideo;
   final DateTime addedAt;
@@ -57,20 +58,30 @@ class Song {
   }
 
   factory Song.fromMap(Map<String, dynamic> map) {
+    // Defensive casts: some sqflite backends return numerics as `num`/`BigInt`
+    // rather than `int`, which would throw on a direct `as int?` cast.
+    int? asInt(Object? v) => v is num ? v.toInt() : null;
+    DateTime? parseDate(Object? v) {
+      if (v is String) {
+        try {
+          return DateTime.parse(v);
+        } catch (_) {}
+      }
+      return null;
+    }
+
     return Song(
-      id: map['id'] as int?,
-      title: map['title'] as String,
+      id: asInt(map['id']),
+      title: (map['title'] as String?) ?? '',
       artist: map['artist'] as String?,
-      filePath: map['file_path'] as String,
+      filePath: (map['file_path'] as String?) ?? '',
       folderName: map['folder_name'] as String?,
-      durationMs: map['duration_ms'] as int?,
+      durationMs: asInt(map['duration_ms']),
       coverArtPath: map['cover_art_path'] as String?,
-      playCount: map['play_count'] as int? ?? 0,
-      lastPlayedAt: map['last_played_at'] != null
-          ? DateTime.parse(map['last_played_at'] as String)
-          : null,
-      hasVideo: (map['has_video'] as int? ?? 0) != 0,
-      addedAt: DateTime.parse(map['added_at'] as String),
+      playCount: asInt(map['play_count']) ?? 0,
+      lastPlayedAt: parseDate(map['last_played_at']),
+      hasVideo: (asInt(map['has_video']) ?? 0) != 0,
+      addedAt: parseDate(map['added_at']) ?? DateTime.now(),
     );
   }
 

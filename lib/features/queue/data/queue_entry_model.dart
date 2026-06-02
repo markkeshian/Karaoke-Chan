@@ -49,21 +49,27 @@ class QueueEntry {
   }
 
   factory QueueEntry.fromMap(Map<String, dynamic> map) {
+    int? asInt(Object? v) => v is num ? v.toInt() : null;
+    DateTime? parseDate(Object? v) {
+      if (v is String) {
+        try {
+          return DateTime.parse(v);
+        } catch (_) {}
+      }
+      return null;
+    }
+
     return QueueEntry(
-      id: map['id'] as int?,
-      songId: map['song_id'] as int,
-      position: map['position'] as int,
+      id: asInt(map['id']),
+      songId: asInt(map['song_id']) ?? 0,
+      position: asInt(map['position']) ?? 0,
       status: QueueStatus.values.firstWhere(
         (s) => s.name == map['status'],
         orElse: () => QueueStatus.waiting,
       ),
-      addedAt: DateTime.parse(map['added_at'] as String),
-      startedAt: map['started_at'] != null
-          ? DateTime.parse(map['started_at'] as String)
-          : null,
-      finishedAt: map['finished_at'] != null
-          ? DateTime.parse(map['finished_at'] as String)
-          : null,
+      addedAt: parseDate(map['added_at']) ?? DateTime.now(),
+      startedAt: parseDate(map['started_at']),
+      finishedAt: parseDate(map['finished_at']),
     );
   }
 

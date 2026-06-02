@@ -48,7 +48,10 @@ class QueueRepository {
     final maxPos = await _db.db.rawQuery(
       "SELECT MAX(position) AS mp FROM queue_entries WHERE status IN ('waiting','playing')",
     );
-    final nextPos = ((maxPos.first['mp'] as int?) ?? -1) + 1;
+    // Defensive cast: some sqflite backends return numerics as `num`/`BigInt`
+    // rather than `int`, which would throw on a direct `as int?` cast.
+    final rawMp = maxPos.isNotEmpty ? maxPos.first['mp'] : null;
+    final nextPos = ((rawMp is num) ? rawMp.toInt() : -1) + 1;
 
     final entry = QueueEntry(songId: songId, position: nextPos);
     final id = await _db.db.insert('queue_entries', entry.toMap());
@@ -127,17 +130,30 @@ class QueueRepository {
   }
 
   QueueEntry _mapRow(Map<String, dynamic> row) {
+    // Defensive numeric casts: some sqflite backends return ints as `num`.
+    int? asInt(Object? v) => v is num ? v.toInt() : null;
     final song = Song(
-      id: row['song_id'] as int,
-      title: row['song_title'] as String,
+      id: asInt(row['song_id']) ?? 0,
+      title: row['song_title'] as String? ?? '',
       artist: row['song_artist'] as String?,
-      filePath: row['song_file_path'] as String,
+      filePath: row['song_file_path'] as String? ?? '',
       folderName: row['song_folder_name'] as String?,
-      durationMs: row['song_duration_ms'] as int?,
-      playCount: row['song_play_count'] as int? ?? 0,
-      addedAt: DateTime.parse(row['song_added_at'] as String),
+      durationMs: asInt(row['song_duration_ms']),
+      playCount: asInt(row['song_play_count']) ?? 0,
+      addedAt: _parseDateOrNow(row['song_added_at']),
     );
     return QueueEntry.fromMap(row).copyWith(song: song);
+  }
+
+  static DateTime _parseDateOrNow(Object? v) {
+    if (v is String) {
+      try {
+        return DateTime.parse(v);
+      } catch (_) {
+        // Fall through on malformed date strings.
+      }
+    }
+    return DateTime.now();
   }
 }
 

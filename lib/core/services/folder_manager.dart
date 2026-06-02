@@ -26,12 +26,13 @@ class FolderManager {
     ].request();
 
     // Fallback: also try READ_EXTERNAL_STORAGE for Android ≤12
-    if (results[Permission.videos] != PermissionStatus.granted) {
+    final videosStatus = results[Permission.videos];
+    if (videosStatus == null || videosStatus != PermissionStatus.granted) {
       final legacy = await Permission.storage.request();
       return legacy.isGranted;
     }
 
-    return results[Permission.videos]!.isGranted;
+    return videosStatus.isGranted;
   }
 
   Future<String?> getSavedFolder() async {

@@ -214,7 +214,14 @@ class YoutubeService {
         'Last error: $lastError');
   }
 
-  void dispose() => _yt.close();
+  void dispose() {
+    try {
+      _yt.close();
+    } catch (_) {
+      // youtube_explode_dart can throw if requests are in-flight at close.
+      // We're shutting down anyway — swallow.
+    }
+  }
 }
 
 // ── Provider ──────────────────────────────────────────────────────────────────

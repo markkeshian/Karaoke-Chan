@@ -1,5 +1,6 @@
 // lib/features/player/data/player_notifier.dart
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -17,6 +18,9 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   VideoController? videoController;
   final List<StreamSubscription> _subs = [];
   bool _disposed = false;
+  // True if Player()/VideoController() failed to construct — every public
+  // method becomes a no-op so we never blow up with LateInitializationError.
+  bool _initFailed = false;
   // Prevents _onTrackCompleted from firing while skip/advance is in progress
   // AND prevents concurrent advances from stacking up.
   bool _isAdvancing = false;
@@ -30,6 +34,11 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   final Map<String, String> _streamUrlCache = {};
   final Map<String, DateTime> _streamUrlCachedAt = {};
   static const _cacheMaxAge = Duration(hours: 4);
+
+  /// Tracks YouTube videoIds we've already auto-retried in the current
+  /// playback session. Prevents the error-stream listener from looping
+  /// forever when both the cached AND freshly-resolved URLs are bad.
+  final Set<String> _ytAutoRetried = {};
 
   String? _getCachedUrl(String videoId) {
     final url = _streamUrlCache[videoId];
@@ -70,18 +79,53 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   @override
   Future<KaraokePlayerState> build() async {
     _disposed = false;
-    _player = Player();
-    videoController = VideoController(_player);
-    _attachListeners();
+    _initFailed = false;
+    try {
+      _player = Player();
+      videoController = VideoController(_player);
+      _attachListeners();
+    } catch (e, st) {
+      // Native media engine failed to initialize. Mark the notifier as
+      // unusable rather than crashing the whole app. The UI can still
+      // render — every player command becomes a safe no-op.
+      _initFailed = true;
+      videoController = null;
+      // Surface via Flutter error reporting so it ends up in the crash log.
+      FlutterError.reportError(FlutterErrorDetails(
+        exception: e,
+        stack: st,
+        library: 'PlayerNotifier',
+        context: ErrorDescription('initializing media_kit Player'),
+      ));
+    }
     ref.onDispose(() {
       _disposed = true;
       _ytPauseDebounce?.cancel();
       for (final s in _subs) {
-        s.cancel();
+        try {
+          s.cancel();
+        } catch (_) {/* ignore */}
       }
-      _player.dispose();
+      if (_initFailed) return;
+      // Delay the native dispose by one event-loop turn so mpv's background
+      // thread can finish any in-flight callback before we free the FFI
+      // pointers.  This reduces (but cannot fully eliminate) the
+      // "Callback invoked after it has been deleted" crash that occurs on
+      // macOS during hot restart (media-kit issue #764).
+      Future<void>.delayed(const Duration(milliseconds: 200), () {
+        try {
+          _player.dispose();
+        } catch (_) {
+          // Already-disposed / native error during teardown — best-effort.
+        }
+      });
     });
-    return const KaraokePlayerState();
+    return KaraokePlayerState(
+      status: _initFailed ? PlayerStatus.error : PlayerStatus.idle,
+      errorMessage: _initFailed
+          ? 'Media engine failed to initialize. Playback unavailable.'
+          : null,
+    );
   }
 
   void _attachListeners() {
@@ -159,7 +203,11 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
           duration: null,
           thumbnailUrl: '',
         );
-        if (video.videoId.isNotEmpty) {
+        // Only auto-retry ONCE per videoId per session to prevent an infinite
+        // error → retry → error loop when the stream is permanently broken.
+        if (video.videoId.isNotEmpty &&
+            !_ytAutoRetried.contains(video.videoId)) {
+          _ytAutoRetried.add(video.videoId);
           playYoutube(video, isRetry: true);
           return;
         }
@@ -237,7 +285,11 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   /// [_isRetry] is used internally to avoid infinite retry loops.
   Future<void> playYoutube(YoutubeVideoResult video,
       {bool isRetry = false}) async {
-    if (_disposed) return;
+    if (_disposed || _initFailed) return;
+
+    // Fresh user-initiated play clears the auto-retry record for this video so
+    // a future stream error can attempt one recovery again.
+    if (!isRetry) _ytAutoRetried.remove(video.videoId);
 
     // Stamp this load with a token. If skip() is called before the async
     // stream URL resolves, the token is incremented and this call will see
@@ -302,7 +354,7 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   }
 
   Future<void> playEntry(QueueEntry entry) async {
-    if (_disposed) return;
+    if (_disposed || _initFailed) return;
     final song = entry.song;
     if (song == null) return;
 
@@ -317,7 +369,10 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
         ));
 
     try {
-      await _player.open(Media(Uri.file(song.filePath).toString()));
+      // Uri.file() throws on invalid paths — wrap so we surface a friendly
+      // error rather than tearing down the notifier.
+      final mediaUri = Uri.file(song.filePath).toString();
+      await _player.open(Media(mediaUri));
       if (_loadToken != myToken || _disposed) return;
       if (entry.id != null) {
         await ref.read(queueRepositoryProvider).markPlaying(entry.id!);
@@ -331,21 +386,32 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
     }
   }
 
-  Future<void> play() async => _player.play();
+  Future<void> play() async {
+    if (_disposed || _initFailed) return;
+    try {
+      await _player.play();
+    } catch (_) {/* native engine in bad state — ignore */}
+  }
 
   Future<void> pause() async {
+    if (_disposed || _initFailed) return;
     _userPaused = true;
-    await _player.pause();
+    try {
+      await _player.pause();
+    } catch (_) {/* ignore */}
   }
 
   Future<void> togglePlayPause() async {
+    if (_disposed || _initFailed) return;
     // Spinner is visual-only during loading — play button is for play/pause,
     // not skip. Use Next (skip) if you want to move on.
     if (state.value?.isLoading == true) return;
     // If currently playing, this will pause — mark it as intentional so the
     // YouTube debounce is skipped and the icon flips instantly.
-    if (_player.state.playing) _userPaused = true;
-    await _player.playOrPause();
+    try {
+      if (_player.state.playing) _userPaused = true;
+      await _player.playOrPause();
+    } catch (_) {/* ignore */}
   }
 
   /// Immediately stops playback and resets to idle without advancing the queue.
@@ -353,18 +419,30 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   Future<void> stopToIdle() async {
     _isAdvancing = true; // block _onTrackCompleted from firing
     try {
-      await _player.stop();
+      if (!_initFailed) await _player.stop();
       _update((s) => s.copyWith(
           status: PlayerStatus.idle, clearEntry: true, hasVideo: false));
+    } catch (_) {
+      // Best-effort — never let stop() failure crash the reset flow.
     } finally {
       _isAdvancing = false;
     }
   }
 
-  Future<void> seek(Duration position) async => _player.seek(position);
+  Future<void> seek(Duration position) async {
+    if (_disposed || _initFailed) return;
+    try {
+      await _player.seek(position);
+    } catch (_) {/* ignore */}
+  }
 
   Future<void> setVolume(double volume) async {
-    await _player.setVolume(volume * 100);
+    if (_disposed) return;
+    if (!_initFailed) {
+      try {
+        await _player.setVolume(volume * 100);
+      } catch (_) {/* ignore */}
+    }
     _update((s) => s.copyWith(
           volume: volume,
           // Track the last non-zero volume so we can restore it on unmute.
@@ -373,27 +451,38 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
   }
 
   Future<void> toggleMute() async {
+    if (_disposed) return;
     final s = state.value;
     if (s == null) return;
+    Future<void> safeSet(double v) async {
+      if (_initFailed) return;
+      try {
+        await _player.setVolume(v);
+      } catch (_) {/* ignore */}
+    }
+
     if (s.volume > 0) {
       // Mute — remember current volume and set to 0.
-      await _player.setVolume(0);
+      await safeSet(0);
       _update((st) => st.copyWith(volume: 0, lastVolume: s.volume));
     } else {
       // Unmute — restore last known volume (at least 0.1).
       final restore = s.lastVolume > 0 ? s.lastVolume : 1.0;
-      await _player.setVolume(restore * 100);
+      await safeSet(restore * 100);
       _update((st) => st.copyWith(volume: restore));
     }
   }
 
   Future<void> skip() async {
+    if (_disposed) return;
     // Cancel any in-flight YouTube stream resolution immediately.
     _loadToken++;
     if (_isAdvancing) return;
     final current = state.value?.currentEntry;
     if (current?.id != null) {
-      await ref.read(queueRepositoryProvider).markSkipped(current!.id!);
+      try {
+        await ref.read(queueRepositoryProvider).markSkipped(current!.id!);
+      } catch (_) {/* DB transient — continue advancing */}
     }
     await _advanceQueue(doneEntryId: current?.id);
   }
@@ -441,11 +530,19 @@ class PlayerNotifier extends AsyncNotifier<KaraokePlayerState> {
       if (next != null) {
         await playEntry(next);
       } else {
-        await _player.stop();
+        if (!_initFailed) {
+          try {
+            await _player.stop();
+          } catch (_) {/* ignore */}
+        }
         _update((s) => s.copyWith(
             status: PlayerStatus.idle, clearEntry: true, hasVideo: false));
       }
       await ref.read(queueNotifierProvider.notifier).refresh();
+    } catch (_) {
+      // Never let a queue-advance failure crash the app — recover into idle.
+      _update((s) => s.copyWith(
+          status: PlayerStatus.idle, clearEntry: true, hasVideo: false));
     } finally {
       _isAdvancing = false;
     }

@@ -108,25 +108,29 @@ class _KaraokeStageState extends ConsumerState<KaraokeStage> {
     if (event is! KeyDownEvent) return false;
     // Don't steal keyboard shortcuts while the search bar is focused.
     if (_searchFocusNode.hasFocus) return false;
-    final key = event.logicalKey;
-    if (key == LogicalKeyboardKey.keyF || key == LogicalKeyboardKey.f11) {
-      _toggleFullscreen();
-      return true;
-    }
-    if (key == LogicalKeyboardKey.escape && _fullscreen) {
-      _setFullscreen(false);
-      return true;
-    }
-    if (key == LogicalKeyboardKey.space ||
-        key == LogicalKeyboardKey.mediaPlayPause) {
-      ref.read(playerProvider.notifier).togglePlayPause();
-      return true;
-    }
-    if (key == LogicalKeyboardKey.mediaTrackNext ||
-        key == LogicalKeyboardKey.arrowRight &&
-            HardwareKeyboard.instance.isMetaPressed) {
-      ref.read(playerProvider.notifier).skip();
-      return true;
+    try {
+      final key = event.logicalKey;
+      if (key == LogicalKeyboardKey.keyF || key == LogicalKeyboardKey.f11) {
+        _toggleFullscreen();
+        return true;
+      }
+      if (key == LogicalKeyboardKey.escape && _fullscreen) {
+        _setFullscreen(false);
+        return true;
+      }
+      if (key == LogicalKeyboardKey.space ||
+          key == LogicalKeyboardKey.mediaPlayPause) {
+        ref.read(playerProvider.notifier).togglePlayPause();
+        return true;
+      }
+      if (key == LogicalKeyboardKey.mediaTrackNext ||
+          key == LogicalKeyboardKey.arrowRight &&
+              HardwareKeyboard.instance.isMetaPressed) {
+        ref.read(playerProvider.notifier).skip();
+        return true;
+      }
+    } catch (_) {
+      // A bad keyboard shortcut must never crash the app.
     }
     return false;
   }
@@ -1704,6 +1708,26 @@ class _VideoAreaState extends ConsumerState<_VideoArea> {
               ),
             ),
 
+          // Persistent "Up Next" panel at the bottom-right — visible in
+          // fullscreen even when the main controls have faded out so the
+          // singer always knows what's coming next without tapping the
+          // screen. Hidden in lock mode (where all chrome is suppressed).
+          if (widget.fullscreen && !_locked && player.unifiedQueue.isNotEmpty)
+            Positioned(
+              right: 20,
+              bottom: MediaQuery.paddingOf(context).bottom + 16,
+              child: IgnorePointer(
+                ignoring: true,
+                child: AnimatedOpacity(
+                  // Fade out while the full bottom overlay is visible so the
+                  // two "UP NEXT" labels don't stack on top of each other.
+                  opacity: showControls ? 0.0 : 1.0,
+                  duration: const Duration(milliseconds: 250),
+                  child: _PersistentUpNext(item: player.unifiedQueue.first),
+                ),
+              ),
+            ),
+
           // Top-right control cluster: lock toggle + fullscreen toggle.
           // In lock mode, only the lock button (centered) is shown.
           if (widget.fullscreen && !_locked)
@@ -1860,6 +1884,77 @@ class _CircleIconButton extends StatelessWidget {
     );
     if (tooltip == null) return button;
     return Semantics(label: tooltip, button: true, child: button);
+  }
+}
+
+/// Persistent "Up Next" block anchored to the bottom-right of the fullscreen
+/// video. Mirrors the styling of the right-side "UP NEXT" column inside
+/// [_NowPlayingOverlay] so the indicator is always visible — even when the
+/// main controls have auto-hidden — without any extra chrome.
+class _PersistentUpNext extends StatelessWidget {
+  const _PersistentUpNext({required this.item});
+  final UnifiedQueueItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final subtitle = item.isYoutube ? item.youtubeVideo?.channel : null;
+    final icon = item.isYoutube ? Icons.language : Icons.person_outline;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 520),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'UP NEXT',
+            style: TextStyle(
+              fontSize: _tsXs,
+              fontWeight: FontWeight.w700,
+              color: _purple,
+              letterSpacing: 1.2,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            item.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.end,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              shadows: [
+                Shadow(
+                  color: Colors.black,
+                  blurRadius: 8,
+                  offset: Offset(0, 1),
+                ),
+              ],
+            ),
+          ),
+          if (subtitle != null && subtitle.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: Colors.white38, size: 11),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.end,
+                    style: const TextStyle(color: _sub, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }
 
